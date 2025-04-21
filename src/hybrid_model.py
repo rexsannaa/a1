@@ -200,7 +200,7 @@ class HybridPINNLSTM(nn.Module):
         
         # 對異常值進行特殊處理
         anomaly_factor = anomaly_score * 0.1  # 最多額外增加10%
-        delta_w_pred = base_output * (1.0 + anomaly_factor)
+        delta_w_pred = delta_w_pred * (1.0 + anomaly_factor)
         
         # 返回預測的應變差和中間結果
         return {
