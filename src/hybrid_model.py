@@ -32,10 +32,10 @@ class HybridPINNLSTM(nn.Module):
         self.config = config
         
         # 初始化PINN模組(處理靜態特徵) - 使用簡化版本
-        self.pinn_module = SimplePINNModule(config)
+        self.pinn_module = PINNModule(config)
         
         # 初始化LSTM模組(處理時間序列特徵) - 使用簡化版本
-        self.lstm_module = SimpleLSTMModule(config)
+        self.lstm_module = LSTMModule(config)
         
         # 融合層，結合PINN和LSTM的輸出 - 減少隱藏層
         fusion_input_dim = 4  # PINN輸出2 + LSTM輸出2

@@ -86,7 +86,7 @@ class OptimizedTrainer:
             delta_w_pred = outputs['delta_w']
             
             # 計算損失
-            loss_fn = OptimizedCombinedLoss(self.config, self.model)
+            loss_fn = CombinedLoss(self.config, self.model)
             loss_dict = loss_fn(delta_w_pred, targets, static_features)
             loss = loss_dict['total']
             
@@ -208,3 +208,83 @@ class OptimizedTrainer:
             self.model.load_state_dict(best_model)
             
         return self.history
+if __name__ == "__main__":
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+    from src.data_processing import DataProcessor
+    from src.hybrid_model import HybridPINNLSTM
+    from config import config
+    from src.utils import set_seed, ModelManager, VisualizationTools
+
+    # 設置隨機種子確保結果可重現
+    set_seed(config.random_seed)
+    print("開始載入和處理數據...")
+
+    # 初始化數據處理器
+    data_processor = DataProcessor(config)
+    
+    # 載入並處理數據
+    fold_data, df = data_processor.process_pipeline(
+        n_folds=config.n_folds,
+        augment=config.use_augmentation,
+        aug_factor=config.augmentation_factor
+    )
+    
+    # 使用第一個折進行訓練示例
+    print(f"使用第1/{config.n_folds}折進行訓練...")
+    train_data = fold_data[0]['train']
+    val_data = fold_data[0]['test']
+    
+    # 創建數據加載器
+    train_dataset = TensorDataset(
+        torch.FloatTensor(train_data[0]),  # static_features
+        torch.FloatTensor(train_data[1]),  # time_series
+        torch.FloatTensor(train_data[2])   # targets
+    )
+    
+    val_dataset = TensorDataset(
+        torch.FloatTensor(val_data[0]),
+        torch.FloatTensor(val_data[1]),
+        torch.FloatTensor(val_data[2])
+    )
+    
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=True
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False
+    )
+    
+    # 初始化模型
+    print("初始化模型...")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"使用設備: {device}")
+    
+    model = HybridPINNLSTM(config)
+    
+    # 創建並配置訓練器
+    from src.loss_functions import CombinedLoss
+    # 這裡使用已有的CombinedLoss而非未定義的OptimizedCombinedLoss
+    trainer = OptimizedTrainer(model, config, device=device)
+    
+    # 開始訓練
+    print("開始訓練...")
+    history = trainer.train(train_loader, val_loader, config.epochs)
+    
+    # 保存模型
+    model_manager = ModelManager()
+    model_manager.save_model(model, config, {}, "hybrid_model")
+    
+    # 可視化訓練歷史
+    vis_tools = VisualizationTools()
+    vis_tools.plot_training_history(
+        history,
+        save_path=f"{config.results_dir}/training_history.png"
+    )
+    
+    print("訓練完成!")  
