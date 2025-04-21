@@ -160,8 +160,8 @@ class DataProcessor:
         
         return static_norm, time_series_norm, target_norm
     
-    def augment_data(self, static_features, time_series_data, target, factor=3):
-        """改進的數據增強方法，專為小樣本(81筆)設計
+    def augment_data(self, static_features, time_series_data, target, factor=2):
+        """輕量化數據增強方法，適合小樣本(81筆)
         
         Args:
             static_features: 靜態特徵
@@ -184,72 +184,25 @@ class DataProcessor:
         aug_time_series[:n_samples] = time_series_data
         aug_target[:n_samples] = target
         
-        # 高級增強方法1：混合特徵增強
+        # 計算目標值的均值和標準差，用於確保增強數據分布合理
+        target_mean = np.mean(target, axis=0)
+        target_std = np.std(target, axis=0)
+        
+        # 簡單增強策略，添加輕微噪聲
         for i in range(1, factor):
-            start_idx = n_samples * i
-            end_idx = start_idx + n_samples
+            idx = n_samples * i
             
-            if i == 1:
-                # 方法1：智能噪聲增強
-                # 針對不同特徵使用不同量級的噪聲
-                # 幾何特徵(前4個)噪聲較小
-                geo_noise = np.random.normal(0, 0.01, (n_samples, 4))
-                # 變形特徵(後2個)噪聲適中
-                warp_noise = np.random.normal(0, 0.03, (n_samples, 2))
-                static_noise = np.hstack([geo_noise, warp_noise])
-                
-                # 時間序列噪聲適中
-                ts_noise = np.random.normal(0, 0.02, time_series_data.shape)
-                
-                # 目標變數的噪聲非常小，保持物理意義
-                target_noise = np.random.normal(0, 0.001, target.shape)
-                
-                aug_static[start_idx:end_idx] = static_features + static_noise
-                aug_time_series[start_idx:end_idx] = time_series_data + ts_noise
-                aug_target[start_idx:end_idx] = np.maximum(0.001, target + target_noise)
-                
-            elif i == 2:
-                # 方法2：屬性相關增強
-                # 隨機選擇樣本對，按物理關係混合特徵
-                for j in range(n_samples):
-                    # 選擇另一個隨機樣本
-                    k = np.random.randint(0, n_samples)
-                    
-                    # 混合靜態特徵，保持物理關係
-                    # 幾何特徵按比例混合
-                    mix_ratio = np.random.beta(2, 2)  # 產生[0,1]間的beta分佈，集中在0.5附近
-                    
-                    # 靜態特徵的混合
-                    mixed_static = static_features[j] * mix_ratio + static_features[k] * (1 - mix_ratio)
-                    
-                    # 時間序列特徵的混合
-                    mixed_ts = time_series_data[j] * mix_ratio + time_series_data[k] * (1 - mix_ratio)
-                    
-                    # 目標值的混合 - 應用相同比例
-                    mixed_target = target[j] * mix_ratio + target[k] * (1 - mix_ratio)
-                    
-                    # 存儲混合樣本
-                    aug_static[start_idx + j] = mixed_static
-                    aug_time_series[start_idx + j] = mixed_ts
-                    aug_target[start_idx + j] = mixed_target
-        
-        # 應用物理一致性檢查
-        for i in range(n_samples, len(aug_static)):
-            # 確保PCB厚度合理 (0.6-1.0範圍)
-            aug_static[i, 3] = np.clip(aug_static[i, 3], 0.6, 1.0)
+            # 對靜態特徵添加溫和的噪聲
+            static_noise = np.random.normal(0, 0.01, static_features.shape)
+            aug_static[idx:idx+n_samples] = static_features + static_noise
             
-            # 確保Warpage與應變正相關
-            warpage = aug_static[i, 4]
-            # 如果Warpage較大，應變也應該相應較大
-            if warpage > np.percentile(aug_static[:n_samples, 4], 75):
-                scale_factor = 1.05  # 稍微增加應變
-                aug_target[i] *= scale_factor
-            elif warpage < np.percentile(aug_static[:n_samples, 4], 25):
-                scale_factor = 0.95  # 稍微減少應變
-                aug_target[i] *= scale_factor
-        
-        # 確保所有目標值為正且處於合理範圍
-        aug_target = np.clip(aug_target, 0.03, 0.09)
+            # 對時間序列添加溫和的噪聲
+            ts_noise = np.random.normal(0, 0.01, time_series_data.shape)
+            aug_time_series[idx:idx+n_samples] = time_series_data + ts_noise
+            
+            # 對目標值添加溫和的噪聲
+            target_noise = np.random.normal(0, 0.005, target.shape)
+            aug_target[idx:idx+n_samples] = target + target_noise
         
         # 輸出增強後的數據量
         print(f"數據增強: 從 {n_samples} 筆增加到 {len(aug_static)} 筆")
