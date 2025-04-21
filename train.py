@@ -11,6 +11,7 @@ import torch.optim as optim
 import time
 import numpy as np
 import torch.nn.functional as F
+
 class OptimizedTrainer:
     """優化的訓練器，適用於小樣本數據"""
     def __init__(self, model, config, device='cpu'):
