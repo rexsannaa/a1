@@ -8,7 +8,6 @@ config.py - 配置文件
 
 import os
 
-
 class Config:
     """混合模型配置類"""
     def __init__(self):
@@ -24,38 +23,23 @@ class Config:
         self.target_cols = ['Acc. Equi. Strain Up', 'Acc. Equi. Strain Down']
         
         # 資料增強配置
-        self.use_augmentation = False
-        self.augmentation_factor = 5  # 增加增強倍數從3到5
+        self.use_augmentation = True
+        self.augmentation_factor = 2  # 降低增強倍數，避免過度增強
         
         # 交叉驗證配置
         self.n_folds = 5
         
-        # PINN模型配置
-        self.pinn_hidden_dims = [16, 8]  # 增加一層和神經元數量
+        # 模型配置
+        # 刻意保持模型較小，避免小樣本下過擬合
         self.use_dropout = True
-        
-        # LSTM模型配置
-        self.lstm_hidden_dim = 16  # 增加從16到32
-        self.lstm_num_layers = 1  # 增加層數從1到2
-        self.lstm_dropout = 0.1
-        self.lstm_fc_dim = 8  # 增加全連接層維度
-        
-        # 融合層配置
-        self.fusion_hidden_dim = 8  # 增加融合層
+        self.lstm_dropout = 0.2
         
         # 訓練配置
-        self.batch_size = 8  # 增加批次大小
-        self.epochs = 100  # 增加訓練輪數
-        self.learning_rate = 0.0005  # 調整學習率
-        self.weight_decay = 0.0001  # 減少權重衰減
-        self.patience = 15  # 增加早停耐心值
-        
-        # 損失函數配置
-        self.data_loss_weight = 1.0
-        self.physical_loss_weight = 0.2  # 調整物理損失權重
-        self.reg_loss_weight = 0.005  # 調整正則化權重
-        self.lambda_l1 = 0.001  # 調整L1正則化係數
-        self.lambda_l2 = 0.001  # 調整L2正則化係數
+        self.batch_size = 8  # 較小的批次大小
+        self.epochs = 50  # 適當減少訓練輪數
+        self.learning_rate = 0.001  # 較大的學習率促進初期學習
+        self.weight_decay = 0.0001  # 輕微的權重衰減
+        self.patience = 10  # 早停耐心值
         
         # 物理模型參數
         self.c_coefficient = -0.55  # Coffin-Manson係數C
@@ -65,6 +49,5 @@ class Config:
         self.model_save_path = 'models/hybrid_model.pt'
         self.results_dir = 'results'
         
-
 # 創建默認配置實例
 config = Config()
