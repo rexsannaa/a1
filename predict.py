@@ -163,9 +163,12 @@ def evaluate_predictions(predictions, targets, df, data_processor, test_indices=
     nf_true = np.array([calculate_nf_from_delta_w(dw) for dw in delta_w_true_mean])
     
     # 檢驗物理一致性
-    physical_metrics = verify_physical_consistency(predictions['delta_w'], 
-                                                  predictions['pinn_out'], 
-                                                  df)
+    physical_metrics = verify_physical_consistency(
+        predictions['delta_w'],
+        predictions['pinn_out'],
+        df,
+        test_indices
+    )
     
     # 計算Nf預測的評估指標
     nf_mse = mean_squared_error(np.log10(np.abs(nf_true)), np.log10(np.abs(predictions['nf'])))

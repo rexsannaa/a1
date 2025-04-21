@@ -323,13 +323,14 @@ def calculate_metrics(y_true, y_pred):
     return metrics
 
 
-def verify_physical_consistency(predictions, pinn_out, df):
+def verify_physical_consistency(predictions, pinn_out, df, test_indices=None):
     """驗證預測結果的物理一致性
     
     Args:
         predictions: 預測結果
         pinn_out: PINN輸出
         df: 原始數據DataFrame
+        test_indices: 測試數據的索引，用於交叉驗證
         
     Returns:
         物理一致性檢驗結果
@@ -346,19 +347,32 @@ def verify_physical_consistency(predictions, pinn_out, df):
     
     # 3. 檢查幾何參數與應變的關係
     # 在交叉驗證時，需要確保使用對應的子集數據
-    # 只有當預測樣本數和原始數據相同時才進行這項檢查
-    if len(predictions) == len(df):
+    if test_indices is not None and len(test_indices) == len(predictions):
+        # 如果有測試索引，使用對應的原始數據子集
+        subset_df = df.iloc[test_indices]
+        
         # 提取Die尺寸
-        die_sizes = df['Die'].values
-        strain_die_corr = np.corrcoef(die_sizes, predictions[:, 0] + predictions[:, 1])[0, 1]
+        die_sizes = subset_df['Die'].values
+        total_strain = predictions[:, 0] + predictions[:, 1]
+        strain_die_corr = np.corrcoef(die_sizes, total_strain)[0, 1]
         results['die_strain_correlation'] = strain_die_corr
         
         # 4. 檢查Warpage與應變的關係
+        warpage = subset_df['Total Warpage'].values
+        warpage_strain_corr = np.corrcoef(warpage, total_strain)[0, 1]
+        results['warpage_strain_correlation'] = warpage_strain_corr
+    elif len(predictions) == len(df):
+        # 如果預測樣本數和原始數據相同，直接使用
+        die_sizes = df['Die'].values
+        total_strain = predictions[:, 0] + predictions[:, 1]
+        strain_die_corr = np.corrcoef(die_sizes, total_strain)[0, 1]
+        results['die_strain_correlation'] = strain_die_corr
+        
         warpage = df['Total Warpage'].values
-        warpage_strain_corr = np.corrcoef(warpage, predictions[:, 0] + predictions[:, 1])[0, 1]
+        warpage_strain_corr = np.corrcoef(warpage, total_strain)[0, 1]
         results['warpage_strain_correlation'] = warpage_strain_corr
     else:
-        # 如果是部分數據（交叉驗證的某一折），則跳過這些檢查
+        # 如果維度不匹配，則跳過這些檢查
         results['die_strain_correlation'] = None
         results['warpage_strain_correlation'] = None
     

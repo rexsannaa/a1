@@ -17,6 +17,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+class SimplePINNModule(nn.Module):
+    """簡化版物理信息神經網絡模塊"""
+    def __init__(self, config):
+        super(SimplePINNModule, self).__init__()
+        self.config = config
+        
+        # 靜態特徵維度
+        static_dim = config.static_dim
+        
+        # 簡化為單層網絡
+        self.main_layer = nn.Linear(static_dim, 8)
+        self.output_layer = nn.Linear(8, 2)
+        
+        # 初始化
+        nn.init.kaiming_normal_(self.main_layer.weight, nonlinearity='relu')
+        nn.init.constant_(self.main_layer.bias, 0.01)
+        nn.init.kaiming_normal_(self.output_layer.weight, nonlinearity='relu')
+        nn.init.constant_(self.output_layer.bias, 0.01)
+    
+    def forward(self, static_features):
+        """前向傳播"""
+        x = F.relu(self.main_layer(static_features))
+        delta_w = F.softplus(self.output_layer(x)) * 0.1
+        return delta_w
+    
+    def compute_physical_loss(self, static_features, delta_w_pred):
+        """簡化的物理損失"""
+        # 簡化為基本的泊松比約束
+        volume_consistency = torch.abs(delta_w_pred[:, 0] - delta_w_pred[:, 1])
+        physical_loss = torch.mean(volume_consistency) * 0.1
+        return physical_loss
+
 class PhysicalConstraintLayer(nn.Module):
     """物理約束層，加入材料力學知識"""
     def __init__(self, in_features, out_features):

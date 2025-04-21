@@ -1,371 +1,210 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 """
-train.py - 混合PINN-LSTM模型訓練程式
-本模組實現了銲錫接點疲勞壽命預測模型的訓練流程，
-適用於小樣本數據集(81筆)，採用兩階段預測架構。
-主要特點:
-1. 資料增強技術充分利用有限樣本
-2. K折交叉驗證提高模型穩定性
-3. 先預測應變差(delta_w)，再通過物理公式計算疲勞壽命(Nf)
-4. 結合物理約束的損失函數增強模型泛化能力
-5. 針對小樣本的早停和學習率調度策略
+train.py - 優化的訓練器
+針對小樣本數據的訓練策略，包含進階的正則化和學習率調度。
 """
 
-import os
 import torch
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import argparse
+import torch.nn as nn
+import torch.optim as optim
 import time
-from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
 
-from src.data_processing import DataProcessor
-from src.hybrid_model import HybridPINNLSTM, PINNLSTMTrainer
-from src.utils import ModelManager, VisualizationTools, set_seed
-from config import config
-
-def create_data_loaders(fold_data, batch_size, fold_idx=None):
-    """創建資料載入器
-    
-    Args:
-        fold_data: K折交叉驗證的資料
-        batch_size: 批次大小
-        fold_idx: 使用特定折的索引，若為None則使用所有折
+class OptimizedTrainer:
+    """優化的訓練器，適用於小樣本數據"""
+    def __init__(self, model, config, device='cpu'):
+        self.model = model
+        self.config = config
+        self.device = device
         
-    Returns:
-        訓練和驗證資料載入器
-    """
-    if fold_idx is not None:
-        # 使用特定折
-        fold = fold_data[fold_idx]
-        static_train, time_series_train, target_train = fold['train']
-        static_test, time_series_test, target_test = fold['test']
+        # 將模型轉移到設備
+        self.model.to(self.device)
         
-        # 轉換為PyTorch張量
-        static_train_tensor = torch.FloatTensor(static_train)
-        time_series_train_tensor = torch.FloatTensor(time_series_train)
-        target_train_tensor = torch.FloatTensor(target_train)
+        # 使用SWA優化器，提高泛化能力
+        base_optimizer = optim.AdamW(
+            self.model.parameters(),
+            lr=0.0008,  # 降低學習率
+            weight_decay=0.001,  # 增加權重衰減
+            betas=(0.9, 0.999)
+        )
         
-        static_test_tensor = torch.FloatTensor(static_test)
-        time_series_test_tensor = torch.FloatTensor(time_series_test)
-        target_test_tensor = torch.FloatTensor(target_test)
+        # 使用隨機權重平均
+        self.optimizer = optim.SWA(
+            base_optimizer, 
+            swa_start=10,
+            swa_freq=5,
+            swa_lr=0.0005
+        )
         
-        # 創建資料集
-        train_dataset = TensorDataset(static_train_tensor, time_series_train_tensor, target_train_tensor)
-        test_dataset = TensorDataset(static_test_tensor, time_series_test_tensor, target_test_tensor)
+        # 使用One-Cycle學習率調度
+        self.scheduler = optim.lr_scheduler.OneCycleLR(
+            base_optimizer,
+            max_lr=0.001,
+            epochs=config.epochs,
+            steps_per_epoch=1,
+            pct_start=0.3,
+            div_factor=25.0,
+            final_div_factor=1000.0
+        )
         
-        # 創建資料載入器
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        # 訓練歷史記錄
+        self.history = {
+            'train_loss': [],
+            'val_loss': [],
+            'train_mae': [],
+            'val_mae': [],
+            'lr': []
+        }
         
-    else:
-        # 使用所有折，僅用於最終的完整訓練
-        all_static_train = []
-        all_time_series_train = []
-        all_target_train = []
+    def train_epoch(self, dataloader):
+        """訓練一個epoch"""
+        self.model.train()
+        total_loss = 0
+        total_mae = 0
+        batch_count = 0
         
-        all_static_val = []
-        all_time_series_val = []
-        all_target_val = []
-        
-        # 收集所有折的訓練和驗證資料
-        for fold in fold_data:
-            static_train, time_series_train, target_train = fold['train']
-            static_test, time_series_test, target_test = fold['test']
+        for batch in dataloader:
+            static_features, time_series, targets = batch
             
-            all_static_train.append(static_train)
-            all_time_series_train.append(time_series_train)
-            all_target_train.append(target_train)
+            # 轉移數據到設備
+            static_features = static_features.to(self.device)
+            time_series = time_series.to(self.device)
+            targets = targets.to(self.device)
             
-            all_static_val.append(static_test)
-            all_time_series_val.append(time_series_test)
-            all_target_val.append(target_test)
+            # 清除梯度
+            self.optimizer.zero_grad()
+            
+            # 添加少量高斯噪聲提高魯棒性
+            if self.config.use_augmentation:
+                noise_level = 0.01
+                static_features += torch.randn_like(static_features) * noise_level
+                time_series += torch.randn_like(time_series) * noise_level
+            
+            # 前向傳播
+            outputs = self.model(static_features, time_series)
+            delta_w_pred = outputs['delta_w']
+            
+            # 計算損失
+            loss_fn = OptimizedCombinedLoss(self.config, self.model)
+            loss_dict = loss_fn(delta_w_pred, targets, static_features)
+            loss = loss_dict['total']
+            
+            # 反向傳播
+            loss.backward()
+            
+            # 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+            
+            # 更新參數
+            self.optimizer.step()
+            
+            # 計算MAE
+            mae = torch.mean(torch.abs(delta_w_pred - targets))
+            
+            # 累計統計
+            total_loss += loss.item()
+            total_mae += mae.item()
+            batch_count += 1
         
-        # 合併所有折的資料
-        static_train_combined = np.vstack(all_static_train)
-        time_series_train_combined = np.vstack(all_time_series_train)
-        target_train_combined = np.vstack(all_target_train)
+        # 更新學習率
+        self.scheduler.step()
         
-        static_val_combined = np.vstack(all_static_val)
-        time_series_val_combined = np.vstack(all_time_series_val)
-        target_val_combined = np.vstack(all_target_val)
+        # 返回平均損失和MAE
+        return total_loss / batch_count, total_mae / batch_count
+    
+    def evaluate(self, dataloader):
+        """評估模型"""
+        self.model.eval()
+        total_loss = 0
+        total_mae = 0
+        batch_count = 0
         
-        # 轉換為PyTorch張量
-        static_train_tensor = torch.FloatTensor(static_train_combined)
-        time_series_train_tensor = torch.FloatTensor(time_series_train_combined)
-        target_train_tensor = torch.FloatTensor(target_train_combined)
+        with torch.no_grad():
+            for batch in dataloader:
+                static_features, time_series, targets = batch
+                
+                # 轉移數據到設備
+                static_features = static_features.to(self.device)
+                time_series = time_series.to(self.device)
+                targets = targets.to(self.device)
+                
+                # 前向傳播
+                outputs = self.model(static_features, time_series)
+                delta_w_pred = outputs['delta_w']
+                
+                # 計算損失
+                loss = F.mse_loss(delta_w_pred, targets)
+                
+                # 計算MAE
+                mae = torch.mean(torch.abs(delta_w_pred - targets))
+                
+                # 累計統計
+                total_loss += loss.item()
+                total_mae += mae.item()
+                batch_count += 1
         
-        static_val_tensor = torch.FloatTensor(static_val_combined)
-        time_series_val_tensor = torch.FloatTensor(time_series_val_combined)
-        target_val_tensor = torch.FloatTensor(target_val_combined)
+        # 返回平均損失和MAE
+        return total_loss / batch_count, total_mae / batch_count
+    
+    def train(self, train_loader, val_loader, epochs, patience=15):
+        """完整訓練過程"""
+        best_val_loss = float('inf')
+        best_model = None
+        patience_counter = 0
         
-        # 創建資料集
-        train_dataset = TensorDataset(static_train_tensor, time_series_train_tensor, target_train_tensor)
-        val_dataset = TensorDataset(static_val_tensor, time_series_val_tensor, target_val_tensor)
+        for epoch in range(epochs):
+            start_time = time.time()
+            
+            # 訓練一個epoch
+            train_loss, train_mae = self.train_epoch(train_loader)
+            
+            # 評估
+            val_loss, val_mae = self.evaluate(val_loader)
+            
+            # 記錄當前學習率
+            current_lr = self.optimizer.param_groups[0]['lr']
+            
+            # 更新歷史記錄
+            self.history['train_loss'].append(train_loss)
+            self.history['val_loss'].append(val_loss)
+            self.history['train_mae'].append(train_mae)
+            self.history['val_mae'].append(val_mae)
+            self.history['lr'].append(current_lr)
+            
+            # 打印進度
+            epoch_time = time.time() - start_time
+            print(f"Epoch {epoch+1}/{epochs} - {epoch_time:.2f}s - "
+                  f"loss: {train_loss:.6f} - val_loss: {val_loss:.6f} - "
+                  f"mae: {train_mae:.6f} - val_mae: {val_mae:.6f} - "
+                  f"lr: {current_lr:.6f}")
+            
+            # 檢查是否為最佳模型
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_model = self.model.state_dict().copy()
+                patience_counter = 0
+                print(f"    - 找到新的最佳模型，val_loss: {val_loss:.6f}")
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"早停! {patience}個epoch內沒有改善。")
+                    break
         
-        # 創建資料載入器
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    
-    return train_loader, val_loader
-
-def train_cross_validation(config, fold_data, df):
-    """使用K折交叉驗證進行訓練
-    
-    Args:
-        config: 配置參數
-        fold_data: K折交叉驗證的資料
-        df: 原始資料DataFrame
+        # 如果使用SWA優化器，在訓練結束後更新BN統計量
+        if isinstance(self.optimizer, optim.SWA):
+            print("更新SWA模型的BN統計量...")
+            self.optimizer.swap_swa_sgd()
+            # 更新BN統計量
+            with torch.no_grad():
+                for batch in train_loader:
+                    static_features, time_series, _ = batch
+                    static_features = static_features.to(self.device)
+                    time_series = time_series.to(self.device)
+                    self.model(static_features, time_series)
         
-    Returns:
-        所有折的訓練結果
-    """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用計算設備: {device}")
-    
-    # 初始化結果記錄
-    fold_results = []
-    fold_histories = []
-    best_model = None
-    best_val_loss = float('inf')
-    
-    # 在每一折上訓練模型
-    for fold_idx in range(len(fold_data)):
-        print(f"\n===== 訓練第 {fold_idx+1}/{len(fold_data)} 折 =====")
-        
-        # 創建資料載入器
-        train_loader, val_loader = create_data_loaders(fold_data, config.batch_size, fold_idx)
-        
-        # 初始化模型
-        model = HybridPINNLSTM(config)
-        
-        # 初始化訓練器
-        trainer = PINNLSTMTrainer(model, config, device)
-        
-        # 訓練模型
-        history = trainer.train(train_loader, val_loader, config.epochs)
-        
-        # 評估模型
-        val_loss, val_mae = trainer.evaluate(val_loader)
-        
-        # 記錄結果
-        fold_results.append({
-            'fold': fold_idx,
-            'val_loss': val_loss,
-            'val_mae': val_mae
-        })
-        
-        fold_histories.append(history)
-        
-        print(f"第 {fold_idx+1} 折完成 - 驗證損失: {val_loss:.6f}, 驗證MAE: {val_mae:.6f}")
-        
-        # 保存最佳模型
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_model = model.state_dict().copy()
-            print(f"找到新的最佳模型，val_loss: {val_loss:.6f}")
-    
-    # 輸出交叉驗證結果
-    val_losses = [result['val_loss'] for result in fold_results]
-    val_maes = [result['val_mae'] for result in fold_results]
-    
-    print("\n===== 交叉驗證結果 =====")
-    print(f"平均驗證損失: {np.mean(val_losses):.6f} ± {np.std(val_losses):.6f}")
-    print(f"平均驗證MAE: {np.mean(val_maes):.6f} ± {np.std(val_maes):.6f}")
-    
-    # 返回結果、歷史和最佳模型
-    return {
-        'fold_results': fold_results,
-        'fold_histories': fold_histories,
-        'best_model': best_model,
-        'mean_val_loss': np.mean(val_losses),
-        'std_val_loss': np.std(val_losses)
-    }
-
-def train_final_model(config, fold_data, best_model=None):
-    """使用全部資料訓練最終模型
-    
-    Args:
-        config: 配置參數
-        fold_data: K折交叉驗證的資料
-        best_model: 交叉驗證中的最佳模型權重
-        
-    Returns:
-        訓練好的最終模型和訓練歷史
-    """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print("\n===== 訓練最終模型 =====")
-    
-    # 創建結合所有資料的載入器
-    train_loader, val_loader = create_data_loaders(fold_data, config.batch_size)
-    
-    # 初始化模型
-    model = HybridPINNLSTM(config)
-    
-    # 如果有最佳模型權重，則載入
-    if best_model is not None:
-        model.load_state_dict(best_model)
-        print("從交叉驗證中載入最佳模型權重")
-    
-    # 初始化訓練器
-    trainer = PINNLSTMTrainer(model, config, device)
-    
-    # 訓練模型
-    history = trainer.train(train_loader, val_loader, config.epochs)
-    
-    # 評估最終模型
-    val_loss, val_mae = trainer.evaluate(val_loader)
-    print(f"最終模型 - 驗證損失: {val_loss:.6f}, 驗證MAE: {val_mae:.6f}")
-    
-    return model, history, {'val_loss': val_loss, 'val_mae': val_mae}
-
-def visualize_training_results(cv_results, final_history, config):
-    """可視化訓練結果
-    
-    Args:
-        cv_results: 交叉驗證結果
-        final_history: 最終模型的訓練歷史
-        config: 配置參數
-    """
-    # 創建可視化工具
-    vis_tools = VisualizationTools(results_dir=config.results_dir)
-    
-    # 可視化交叉驗證結果
-    plt.figure(figsize=(10, 6))
-    for i, history in enumerate(cv_results['fold_histories']):
-        plt.plot(history['val_loss'], label=f'折 {i+1}')
-    plt.title('交叉驗證 - 各折驗證損失')
-    plt.xlabel('Epoch')
-    plt.ylabel('驗證損失')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(config.results_dir, 'cv_val_loss.png'))
-    plt.close()
-    
-    # 可視化最終模型訓練歷史
-    vis_tools.plot_training_history(
-        final_history,
-        save_path=os.path.join(config.results_dir, 'final_model_history.png')
-    )
-
-def save_model_and_metrics(model, cv_results, final_metrics, config):
-    """保存模型和指標
-    
-    Args:
-        model: 訓練好的模型
-        cv_results: 交叉驗證結果
-        final_metrics: 最終模型的評估指標
-        config: 配置參數
-    """
-    # 初始化模型管理器
-    model_manager = ModelManager()
-    
-    # 合併所有指標
-    metrics = {
-        'cv_mean_val_loss': cv_results['mean_val_loss'],
-        'cv_std_val_loss': cv_results['std_val_loss'],
-        'final_val_loss': final_metrics['val_loss'],
-        'final_val_mae': final_metrics['val_mae'],
-        'timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-    
-    # 從配置文件路徑提取模型名稱
-    model_name = os.path.basename(config.model_save_path).split('.')[0]
-    
-    # 保存模型和指標
-    model_manager.save_model(model, config, metrics, model_name)
-
-def run_training(config):
-    """執行完整的訓練流程
-    
-    Args:
-        config: 配置參數
-        
-    Returns:
-        訓練好的模型
-    """
-    # 設置隨機種子，確保結果可重現
-    set_seed(config.random_seed)
-    
-    # 創建結果目錄
-    if not os.path.exists(config.results_dir):
-        os.makedirs(config.results_dir)
-    
-    # 初始化數據處理器
-    print("初始化數據處理器...")
-    data_processor = DataProcessor(config)
-    
-    # 加載和處理數據
-    print("處理數據...")
-    fold_data, df = data_processor.process_pipeline(
-        n_folds=config.n_folds,
-        augment=config.use_augmentation,
-        aug_factor=config.augmentation_factor
-    )
-    
-    # 使用交叉驗證訓練模型
-    print("開始交叉驗證訓練...")
-    cv_results = train_cross_validation(config, fold_data, df)
-    
-    # 使用全部數據訓練最終模型
-    print("訓練最終模型...")
-    final_model, final_history, final_metrics = train_final_model(
-        config, fold_data, cv_results['best_model']
-    )
-    
-    # 可視化訓練結果
-    print("生成結果可視化...")
-    visualize_training_results(cv_results, final_history, config)
-    
-    # 保存模型和指標
-    print("保存模型和指標...")
-    save_model_and_metrics(final_model, cv_results, final_metrics, config)
-    
-    print("訓練完成！")
-    return final_model
-
-def parse_args():
-    """解析命令行參數"""
-    parser = argparse.ArgumentParser(description='混合PINN-LSTM模型訓練程式')
-    parser.add_argument('--config', type=str, default=None,
-                        help='配置文件路徑，默認使用內置配置')
-    parser.add_argument('--data', type=str, default=None,
-                        help='數據文件路徑，默認使用配置中的路徑')
-    parser.add_argument('--epochs', type=int, default=None,
-                        help='訓練輪數，默認使用配置中的值')
-    parser.add_argument('--no_augment', action='store_true',
-                        help='禁用數據增強')
-    parser.add_argument('--model_path', type=str, default=None,
-                        help='模型保存路徑，默認使用配置中的路徑')
-    
-    return parser.parse_args()
-
-if __name__ == "__main__":
-    # 解析命令行參數
-    args = parse_args()
-    
-    # 如果指定了配置文件，則加載
-    if args.config:
-        # 這裡可以加載自定義配置
-        pass
-    
-    # 如果指定了數據路徑，更新配置
-    if args.data:
-        config.data_path = args.data
-    
-    # 如果指定了訓練輪數，更新配置
-    if args.epochs:
-        config.epochs = args.epochs
-    
-    # 如果指定了禁用數據增強，更新配置
-    if args.no_augment:
-        config.use_augmentation = False
-    
-    # 如果指定了模型保存路徑，更新配置
-    if args.model_path:
-        config.model_save_path = args.model_path
-    
-    # 執行訓練
-    model = run_training(config)
+        # 加載最佳模型
+        if best_model is not None:
+            self.model.load_state_dict(best_model)
+            
+        return self.history

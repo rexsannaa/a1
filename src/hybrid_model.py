@@ -31,21 +31,19 @@ class HybridPINNLSTM(nn.Module):
         super(HybridPINNLSTM, self).__init__()
         self.config = config
         
-        # 初始化PINN模組(處理靜態特徵)
-        self.pinn_module = PINNModule(config)
+        # 初始化PINN模組(處理靜態特徵) - 使用簡化版本
+        self.pinn_module = SimplePINNModule(config)
         
-        # 初始化LSTM模組(處理時間序列特徵)
-        self.lstm_module = LSTMModule(config)
+        # 初始化LSTM模組(處理時間序列特徵) - 使用簡化版本
+        self.lstm_module = SimpleLSTMModule(config)
         
-        # 融合層，結合PINN和LSTM的輸出
+        # 融合層，結合PINN和LSTM的輸出 - 減少隱藏層
         fusion_input_dim = 4  # PINN輸出2 + LSTM輸出2
-        fusion_hidden_dim = config.fusion_hidden_dim or 8
         
+        # 簡化融合層，直接映射到輸出
         self.fusion_layer = nn.Sequential(
-            nn.Linear(fusion_input_dim, fusion_hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(fusion_hidden_dim, 2)  # 最終輸出2個通道：上升和下降的累積等效應變
+            nn.Linear(fusion_input_dim, 2),
+            nn.Softplus()  # 確保輸出為正值
         )
         
         # 初始化權重
@@ -55,9 +53,10 @@ class HybridPINNLSTM(nn.Module):
         """初始化混合模型權重"""
         for m in self.fusion_layer.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.01)
+    
     
     def forward(self, static_features, time_series):
         """前向傳播
