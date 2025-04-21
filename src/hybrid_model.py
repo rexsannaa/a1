@@ -299,10 +299,9 @@ class SimpleTrainer:
             time_series = time_series.to(self.device)
             targets = targets.to(self.device)
             
-            # 添加訓練噪聲
-            if self.training:
-                static_features = add_noise(static_features, 0.01)
-                time_series = add_noise(time_series, 0.01)
+            # 添加訓練噪聲 - 在訓練時始終添加噪聲
+            static_features = add_noise(static_features, 0.01)
+            time_series = add_noise(time_series, 0.01)
             
             # 清除梯度
             self.optimizer.zero_grad()
