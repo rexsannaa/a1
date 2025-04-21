@@ -24,7 +24,7 @@ class Config:
         self.target_cols = ['Acc. Equi. Strain Up', 'Acc. Equi. Strain Down']
         
         # 資料增強配置
-        self.use_augmentation = True
+        self.use_augmentation = False
         self.augmentation_factor = 5  # 增加增強倍數從3到5
         
         # 交叉驗證配置
@@ -44,11 +44,11 @@ class Config:
         self.fusion_hidden_dim = 8  # 增加融合層
         
         # 訓練配置
-        self.batch_size = 16  # 增加批次大小
-        self.epochs = 200  # 增加訓練輪數
-        self.learning_rate = 0.001  # 調整學習率
-        self.weight_decay = 0.0005  # 減少權重衰減
-        self.patience = 20  # 增加早停耐心值
+        self.batch_size = 8  # 增加批次大小
+        self.epochs = 100  # 增加訓練輪數
+        self.learning_rate = 0.0005  # 調整學習率
+        self.weight_decay = 0.0001  # 減少權重衰減
+        self.patience = 15  # 增加早停耐心值
         
         # 損失函數配置
         self.data_loss_weight = 1.0

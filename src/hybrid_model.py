@@ -20,6 +20,7 @@ from src.pinn_module import PINNModule
 from src.lstm_module import LSTMModule
 
 
+
 class HybridPINNLSTM(nn.Module):
     """混合PINN-LSTM模型，結合靜態特徵和時間序列特徵預測應變差"""
     def __init__(self, config):
@@ -31,29 +32,22 @@ class HybridPINNLSTM(nn.Module):
         super(HybridPINNLSTM, self).__init__()
         self.config = config
         
-        # 初始化PINN模組(處理靜態特徵) - 使用簡化版本
-        self.pinn_module = PINNModule(config)
+        # 使用簡化版本的PINN模組
+        self.pinn_module = SimplePINNModule(config)
         
-        # 初始化LSTM模組(處理時間序列特徵) - 使用簡化版本
-        self.lstm_module = LSTMModule(config)
-        
-        # 融合層，結合PINN和LSTM的輸出 - 減少隱藏層
-        fusion_input_dim = 4  # PINN輸出2 + LSTM輸出2
+        # 使用簡化版本的LSTM模組
+        self.lstm_module = SimpleLSTMModule(config)
         
         # 簡化融合層，直接映射到輸出
+        fusion_input_dim = 4  # PINN輸出2 + LSTM輸出2
         self.fusion_layer = nn.Linear(fusion_input_dim, 2)
         
         # 初始化權重
-        self._initialize_weights()
-        
-    def _initialize_weights(self):
-        """初始化混合模型權重"""
-        for m in self.fusion_layer.modules():
+        for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.01)
-    
     
     def forward(self, static_features, time_series):
         """前向傳播
@@ -71,10 +65,14 @@ class HybridPINNLSTM(nn.Module):
         # 通過LSTM模組獲取時間序列特徵預測
         lstm_out, attention_weights = self.lstm_module(time_series)
         
+        # 合併特徵
         combined_features = torch.cat([pinn_out, lstm_out], dim=1)
-        delta_w_pred = self.fusion_layer(combined_features)
-        delta_w_pred = F.relu(delta_w_pred) + 1e-6
         
+        # 預測應變差
+        delta_w_pred = self.fusion_layer(combined_features)
+        
+        # 確保正值但不強制限制上限
+        delta_w_pred = F.relu(delta_w_pred) + 1e-6
         
         # 返回預測的應變差和中間結果
         return {
@@ -85,19 +83,8 @@ class HybridPINNLSTM(nn.Module):
         }
     
     def calculate_nf(self, delta_w, c=-0.55, m=1.36):
-        """根據預測的應變差計算疲勞壽命
-        
-        使用Coffin-Manson關係：Nf = C * (ΔW/2)^m
-        
-        Args:
-            delta_w: 預測的應變差
-            c: 係數C
-            m: 指數m
-            
-        Returns:
-            計算出的疲勞壽命Nf
-        """
-        delta_w_mean = torch.mean(delta_w, dim=1, keepdim=True)  # 取上升和下降的平均值
+        """根據預測的應變差計算疲勞壽命"""
+        delta_w_mean = torch.mean(delta_w, dim=1, keepdim=True)
         nf = c * (delta_w_mean/2)**m
         return nf
 

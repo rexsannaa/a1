@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+
 class SimplePINNModule(nn.Module):
     """簡化版物理信息神經網絡模塊"""
     def __init__(self, config):
@@ -39,7 +40,7 @@ class SimplePINNModule(nn.Module):
     def forward(self, static_features):
         """前向傳播"""
         x = F.relu(self.main_layer(static_features))
-        delta_w = F.softplus(self.output_layer(x)) * 0.2
+        delta_w = F.relu(self.output_layer(x)) + 0.01
         return delta_w
     
     def compute_physical_loss(self, static_features, delta_w_pred):

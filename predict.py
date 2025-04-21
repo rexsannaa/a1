@@ -153,6 +153,12 @@ def evaluate_predictions(predictions, targets, df, data_processor, test_indices=
     Returns:
         評估指標字典
     """
+    # 添加偵錯輸出
+    print("\n偵錯資訊:")
+    print(f"預測值範圍: {predictions['delta_w'].min()} - {predictions['delta_w'].max()}")
+    print(f"目標值範圍: {targets.min()} - {targets.max()}")
+    print(f"預測值前5筆: {predictions['delta_w'][:5]}")
+    print(f"目標值前5筆: {targets[:5]}")
     # 計算delta_w預測的評估指標
     delta_w_metrics = calculate_metrics(targets, predictions['delta_w'])
     

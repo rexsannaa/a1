@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class SimpleLSTMModule(nn.Module):
     """簡化版長短期記憶網絡模塊"""
     def __init__(self, config):
@@ -38,10 +39,6 @@ class SimpleLSTMModule(nn.Module):
         self.fc = nn.Linear(hidden_dim, 2)
         
         # 初始化權重
-        self._initialize_weights()
-        
-    def _initialize_weights(self):
-        """初始化權重"""
         for name, param in self.lstm.named_parameters():
             if 'weight' in name:
                 nn.init.orthogonal_(param)
@@ -60,7 +57,7 @@ class SimpleLSTMModule(nn.Module):
         last_output = lstm_out[:, -1, :]
         
         # 輸出層
-        delta_w = F.softplus(self.fc(last_output)) * 0.1
+        delta_w = F.relu(self.fc(last_output)) + 0.01
         
         # 為保持與原模型接口一致，返回一個假的注意力權重
         batch_size = time_series.shape[0]

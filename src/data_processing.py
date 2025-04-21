@@ -26,9 +26,10 @@ class DataProcessor:
             config: 配置參數，包含數據路徑、數據增強方法等
         """
         self.config = config
-        self.static_scaler = MinMaxScaler()
-        self.time_series_scaler = MinMaxScaler()
-        self.target_scaler = MinMaxScaler()
+        from sklearn.preprocessing import StandardScaler
+        self.static_scaler = StandardScaler()
+        self.time_series_scaler = StandardScaler()
+        self.target_scaler = None  # 不使用目標變數的標準化
         
         # 靜態特徵和時間序列特徵定義
         self.static_features = ['Die', 'Stud', 'Mold', 'PCB', 'Total Warpage', 'Unit Warpage (No PCB)']
@@ -90,17 +91,7 @@ class DataProcessor:
         return static_features, time_series_data, target
     
     def normalize_data(self, static_features, time_series_data, target, fit=True):
-        """正規化資料
-        
-        Args:
-            static_features: 靜態特徵
-            time_series_data: 時間序列特徵
-            target: 目標變數
-            fit: 是否適配正規化器
-            
-        Returns:
-            正規化後的特徵和目標變數
-        """
+        # 初始化器裡改用StandardScaler
         # 正規化靜態特徵
         if fit:
             static_norm = self.static_scaler.fit_transform(static_features)
@@ -118,31 +109,22 @@ class DataProcessor:
             
         time_series_norm = time_series_flat_norm.reshape(time_series_data.shape)
         
-        # 正規化目標變數
-        if fit:
-            target_norm = self.target_scaler.fit_transform(target)
-        else:
-            target_norm = self.target_scaler.transform(target)
+        # 關鍵改變：不對目標變數進行標準化
+        # 目標變數(應變差)是小數值，直接使用原始值
+        target_norm = target.copy()
         
         return static_norm, time_series_norm, target_norm
     
+    # 修改位置：augment_data方法(大約在第162行)
+
+
     def augment_data(self, static_features, time_series_data, target, factor=3):
-        """數據增強：對小樣本數據進行擴充，使用更多樣化的方法
-        
-        Args:
-            static_features: 靜態特徵
-            time_series_data: 時間序列特徵
-            target: 目標變數
-            factor: 增強倍數
-            
-        Returns:
-            增強後的特徵和目標變數
-        """
+        """簡化的數據增強"""
         n_samples = static_features.shape[0]
         aug_static = np.zeros((n_samples * factor, static_features.shape[1]))
         aug_time_series = np.zeros((n_samples * factor, 
-                                    time_series_data.shape[1], 
-                                    time_series_data.shape[2]))
+                                time_series_data.shape[1], 
+                                time_series_data.shape[2]))
         aug_target = np.zeros((n_samples * factor, target.shape[1]))
         
         # 先複製原始數據
@@ -150,50 +132,17 @@ class DataProcessor:
         aug_time_series[:n_samples] = time_series_data
         aug_target[:n_samples] = target
         
-        # 實現更多樣化的數據增強方法
+        # 簡單噪聲增強
         for i in range(1, factor):
             idx = n_samples * i
+            # 針對不同特徵使用不同量級的噪聲
+            static_noise = np.random.normal(0, 0.01, static_features.shape)
+            ts_noise = np.random.normal(0, 0.01, time_series_data.shape)
+            target_noise = np.random.normal(0, 0.001, target.shape)  # 極小的目標噪聲
             
-            # 1. 微小隨機噪聲增強 - 根據數據量級調整噪聲
-            if i == 1:
-                # 針對不同特徵使用不同量級的噪聲
-                # 根據資料本身的標準差來設定噪聲水平
-                static_std = np.std(static_features, axis=0) * 0.05
-                static_noise = np.random.normal(0, static_std, static_features.shape)
-
-                ts_std = np.std(time_series_data, axis=(0,1)) * 0.05
-                ts_noise = np.random.normal(0, ts_std, time_series_data.shape)
-
-                target_std = np.std(target, axis=0) * 0.05
-                target_noise = np.random.normal(0, target_std, target.shape)
-                
-                # 確保增強後的目標仍為正值
-                aug_static[idx:idx+n_samples] = static_features + static_noise
-                aug_time_series[idx:idx+n_samples] = time_series_data + ts_noise
-                aug_target[idx:idx+n_samples] = np.maximum(0.001, target + target_noise)
-            
-            # 2. 特徵組合增強
-            else:
-                # 隨機選擇樣本對進行插值
-                for j in range(n_samples):
-                    # 找到最近的5個樣本
-                    distances = np.sum((static_features - static_features[j]) ** 2, axis=1)
-                    distances[j] = np.inf  # 排除自身
-                    closest_idx = np.argsort(distances)[:5]
-                    # 隨機選擇一個最近的樣本
-                    k = closest_idx[np.random.randint(0, len(closest_idx))]
-                    # 使用變化的插值比例
-                    ratio = np.random.uniform(0.2, 0.8)
-                    # 線性插值
-                    aug_static[idx+j] = static_features[j] * ratio + static_features[k] * (1-ratio)
-                    aug_time_series[idx+j] = time_series_data[j] * ratio + time_series_data[k] * (1-ratio)
-                    aug_target[idx+j] = target[j] * ratio + target[k] * (1-ratio)
-                    
-                    # 額外添加少量隨機擾動
-                    aug_static[idx+j] += np.random.normal(0, 0.01, static_features.shape[1])
-                    aug_time_series[idx+j] += np.random.normal(0, 0.01, time_series_data.shape[1:])
-                    # 確保目標值為正
-                    aug_target[idx+j] = np.maximum(0.001, aug_target[idx+j])
+            aug_static[idx:idx+n_samples] = static_features + static_noise
+            aug_time_series[idx:idx+n_samples] = time_series_data + ts_noise
+            aug_target[idx:idx+n_samples] = np.maximum(0.001, target + target_noise)
         
         return aug_static, aug_time_series, aug_target
     

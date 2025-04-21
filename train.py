@@ -14,6 +14,8 @@ import torch.nn.functional as F
 
 class OptimizedTrainer:
     """優化的訓練器，適用於小樣本數據"""
+    # 修改位置：OptimizedTrainer類的__init__方法(大約在第25行)
+
     def __init__(self, model, config, device='cpu'):
         self.model = model
         self.config = config
@@ -22,23 +24,20 @@ class OptimizedTrainer:
         # 將模型轉移到設備
         self.model.to(self.device)
         
-        # 使用AdamW優化器，提高泛化能力
+        # 使用更穩定的優化器設定
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=0.0001,  # 進一步降低學習率
-            weight_decay=0.0005,  # 減少權重衰減
-            betas=(0.9, 0.999)
+            lr=0.0005,  # 適中學習率
+            weight_decay=0.0001  # 輕微權重衰減
         )
         
-        # 使用One-Cycle學習率調度
-        self.scheduler = optim.lr_scheduler.OneCycleLR(
+        # 使用ReduceLROnPlateau替代OneCycleLR
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
-            max_lr=0.0005,  # 降低最大學習率
-            epochs=config.epochs,
-            steps_per_epoch=1,
-            pct_start=0.3,
-            div_factor=25.0,
-            final_div_factor=1000.0
+            mode='min',
+            factor=0.5,
+            patience=5,
+            verbose=True
         )
 
         
