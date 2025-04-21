@@ -21,25 +21,17 @@ class OptimizedTrainer:
         # 將模型轉移到設備
         self.model.to(self.device)
         
-        # 使用SWA優化器，提高泛化能力
-        base_optimizer = optim.AdamW(
+        # 使用AdamW優化器，提高泛化能力
+        self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=0.0008,  # 降低學習率
             weight_decay=0.001,  # 增加權重衰減
             betas=(0.9, 0.999)
         )
         
-        # 使用隨機權重平均
-        self.optimizer = optim.SWA(
-            base_optimizer, 
-            swa_start=10,
-            swa_freq=5,
-            swa_lr=0.0005
-        )
-        
         # 使用One-Cycle學習率調度
         self.scheduler = optim.lr_scheduler.OneCycleLR(
-            base_optimizer,
+            self.optimizer,  # 這裡改為直接使用self.optimizer
             max_lr=0.001,
             epochs=config.epochs,
             steps_per_epoch=1,
@@ -191,17 +183,17 @@ class OptimizedTrainer:
                     print(f"早停! {patience}個epoch內沒有改善。")
                     break
         
-        # 如果使用SWA優化器，在訓練結束後更新BN統計量
-        if isinstance(self.optimizer, optim.SWA):
-            print("更新SWA模型的BN統計量...")
-            self.optimizer.swap_swa_sgd()
-            # 更新BN統計量
-            with torch.no_grad():
-                for batch in train_loader:
-                    static_features, time_series, _ = batch
-                    static_features = static_features.to(self.device)
-                    time_series = time_series.to(self.device)
-                    self.model(static_features, time_series)
+        ## 如果使用SWA優化器，在訓練結束後更新BN統計量
+        #if isinstance(self.optimizer, optim.SWA):
+        #    print("更新SWA模型的BN統計量...")
+        #    self.optimizer.swap_swa_sgd()
+        #    # 更新BN統計量
+        #    with torch.no_grad():
+        #        for batch in train_loader:
+        #            static_features, time_series, _ = batch
+        #            static_features = static_features.to(self.device)
+        #            time_series = time_series.to(self.device)
+        #            self.model(static_features, time_series)
         
         # 加載最佳模型
         if best_model is not None:
