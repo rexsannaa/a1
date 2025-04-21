@@ -99,7 +99,7 @@ class HybridPINNLSTM(nn.Module):
             nn.Linear(24, 16),
         )
         
-        # 改進：增強時間序列提取器（LSTM分支）
+        # LSTM 編碼器和注意力機制保持不變
         self.ts_encoder = nn.LSTM(
             input_size=config.ts_feature_dim,
             hidden_size=24,
@@ -109,20 +109,19 @@ class HybridPINNLSTM(nn.Module):
             dropout=0.2
         )
         
-        # 改進：注意力機制
         self.attention = nn.Sequential(
             nn.Linear(48, 1),  # 雙向LSTM輸出維度為24*2=48
             nn.Softmax(dim=1)
         )
         
-        # 改進：特徵融合層
+        # 改進：確保融合層也使用 LayerNorm（這裡之前可能漏掉了）
         self.fusion_layer = nn.Sequential(
-            nn.Linear(16 + 48, 32),  # 靜態特徵維度16加上LSTM特徵維度48
-            nn.BatchNorm1d(32),
+            nn.Linear(16 + 48, 32),
+            nn.LayerNorm(32),  # 替換為 LayerNorm
             nn.LeakyReLU(0.1),
             nn.Dropout(0.2),
             nn.Linear(32, 16),
-            nn.BatchNorm1d(16),
+            nn.LayerNorm(16),  # 替換為 LayerNorm
             nn.LeakyReLU(0.1),
             nn.Linear(16, 2)
         )
