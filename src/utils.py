@@ -19,6 +19,9 @@ import os
 import json
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import time
+import matplotlib as mpl
+mpl.rc("font", family="SimHei")  # 使用黑體字
+mpl.rcParams['axes.unicode_minus'] = False
 
 class EarlyStopping:
     """早停機制，防止過擬合"""
@@ -151,7 +154,6 @@ class ModelManager:
 
 
 class VisualizationTools:
-    """可視化工具類"""
     def __init__(self, results_dir='results'):
         """初始化可視化工具
         
@@ -161,6 +163,24 @@ class VisualizationTools:
         self.results_dir = results_dir
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
+        
+        # 設置中文字體支援
+        import matplotlib as mpl
+        import platform
+        
+        system = platform.system()
+        if system == "Windows":
+            # Windows 系統
+            mpl.rc("font", family="Microsoft YaHei")
+        elif system == "Darwin":
+            # macOS 系統
+            mpl.rc("font", family="Arial Unicode MS")
+        else:
+            # Linux 系統
+            mpl.rc("font", family="WenQuanYi Micro Hei")
+    
+    # 解決負號顯示問題
+    mpl.rcParams['axes.unicode_minus'] = False
     
     def plot_training_history(self, history, save_path=None):
         """繪製訓練歷史圖表

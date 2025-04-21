@@ -1,0 +1,60 @@
+{
+  "config": {
+    "data_path": "data/Training_data_warpage_final_20250321_v1.2.csv",
+    "random_seed": 42,
+    "static_dim": 6,
+    "ts_feature_dim": 2,
+    "time_series_up_cols": [
+      "NLPLWK_Up_14400",
+      "NLPLWK_Up_10800",
+      "NLPLWK_Up_7200",
+      "NLPLWK_Up_3600"
+    ],
+    "time_series_down_cols": [
+      "NLPLWK_Down_14400",
+      "NLPLWK_Down_10800",
+      "NLPLWK_Down_7200",
+      "NLPLWK_Down_3600"
+    ],
+    "target_cols": [
+      "Acc. Equi. Strain Up",
+      "Acc. Equi. Strain Down"
+    ],
+    "use_augmentation": true,
+    "augmentation_factor": 5,
+    "n_folds": 5,
+    "pinn_hidden_dims": [
+      24,
+      16,
+      12
+    ],
+    "use_dropout": true,
+    "lstm_hidden_dim": 32,
+    "lstm_num_layers": 2,
+    "lstm_dropout": 0.2,
+    "lstm_fc_dim": 16,
+    "fusion_hidden_dim": 8,
+    "batch_size": 16,
+    "epochs": 300,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "patience": 20,
+    "data_loss_weight": 1.0,
+    "physical_loss_weight": 0.5,
+    "reg_loss_weight": 0.01,
+    "lambda_l1": 0.001,
+    "lambda_l2": 0.001,
+    "c_coefficient": -0.55,
+    "m_exponent": 1.36,
+    "model_save_path": "models/hybrid_model.pt",
+    "results_dir": "results"
+  },
+  "metrics": {
+    "cv_mean_val_loss": 0.42487060008570554,
+    "cv_std_val_loss": 0.6293553121983904,
+    "final_val_loss": 0.4022869433198745,
+    "final_val_mae": 0.1945254219075044,
+    "timestamp": "2025-04-21 10:48:18"
+  },
+  "timestamp": "2025-04-21 10:48:18"
+}
