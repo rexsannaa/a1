@@ -25,21 +25,22 @@ class OptimizedTrainer:
         # 使用AdamW優化器，提高泛化能力
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=0.0008,  # 降低學習率
-            weight_decay=0.001,  # 增加權重衰減
+            lr=0.0001,  # 進一步降低學習率
+            weight_decay=0.0005,  # 減少權重衰減
             betas=(0.9, 0.999)
         )
         
         # 使用One-Cycle學習率調度
         self.scheduler = optim.lr_scheduler.OneCycleLR(
-            self.optimizer,  # 這裡改為直接使用self.optimizer
-            max_lr=0.001,
+            self.optimizer,
+            max_lr=0.0005,  # 降低最大學習率
             epochs=config.epochs,
             steps_per_epoch=1,
             pct_start=0.3,
             div_factor=25.0,
             final_div_factor=1000.0
         )
+
         
         # 訓練歷史記錄
         self.history = {

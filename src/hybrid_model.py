@@ -41,10 +41,7 @@ class HybridPINNLSTM(nn.Module):
         fusion_input_dim = 4  # PINN輸出2 + LSTM輸出2
         
         # 簡化融合層，直接映射到輸出
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(fusion_input_dim, 2),
-            nn.Softplus()  # 確保輸出為正值
-        )
+        self.fusion_layer = nn.Linear(fusion_input_dim, 2)
         
         # 初始化權重
         self._initialize_weights()
@@ -74,9 +71,9 @@ class HybridPINNLSTM(nn.Module):
         # 通過LSTM模組獲取時間序列特徵預測
         lstm_out, attention_weights = self.lstm_module(time_series)
         
-        # 融合兩個分支的輸出
         combined_features = torch.cat([pinn_out, lstm_out], dim=1)
         delta_w_pred = self.fusion_layer(combined_features)
+        delta_w_pred = F.relu(delta_w_pred) + 1e-6
         
         
         # 返回預測的應變差和中間結果

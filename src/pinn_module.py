@@ -145,11 +145,9 @@ class PINNModule(nn.Module):
         # 通過物理引導的層
         x = self.layers(static_features)
         
-        # 輸出層：預測delta_w
         delta_w = self.output_layer(x)
-        
-        # 使用Softplus確保應變為正值，符合物理意義
-        delta_w = F.softplus(delta_w) * 0.1
+        # 確保應變為正值但不限制上限
+        delta_w = F.relu(delta_w) + 1e-6
         
         return delta_w
     

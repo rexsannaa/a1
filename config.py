@@ -31,14 +31,14 @@ class Config:
         self.n_folds = 5
         
         # PINN模型配置
-        self.pinn_hidden_dims = [24, 16]  # 增加一層和神經元數量
+        self.pinn_hidden_dims = [16, 8]  # 增加一層和神經元數量
         self.use_dropout = True
         
         # LSTM模型配置
-        self.lstm_hidden_dim = 32  # 增加從16到32
-        self.lstm_num_layers = 2  # 增加層數從1到2
-        self.lstm_dropout = 0.2
-        self.lstm_fc_dim = 16  # 增加全連接層維度
+        self.lstm_hidden_dim = 16  # 增加從16到32
+        self.lstm_num_layers = 1  # 增加層數從1到2
+        self.lstm_dropout = 0.1
+        self.lstm_fc_dim = 8  # 增加全連接層維度
         
         # 融合層配置
         self.fusion_hidden_dim = 8  # 增加融合層

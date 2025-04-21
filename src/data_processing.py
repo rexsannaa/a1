@@ -157,9 +157,15 @@ class DataProcessor:
             # 1. 微小隨機噪聲增強 - 根據數據量級調整噪聲
             if i == 1:
                 # 針對不同特徵使用不同量級的噪聲
-                static_noise = np.random.normal(0, 0.02, static_features.shape)
-                ts_noise = np.random.normal(0, 0.02, time_series_data.shape)
-                target_noise = np.random.normal(0, 0.02, target.shape)
+                # 根據資料本身的標準差來設定噪聲水平
+                static_std = np.std(static_features, axis=0) * 0.05
+                static_noise = np.random.normal(0, static_std, static_features.shape)
+
+                ts_std = np.std(time_series_data, axis=(0,1)) * 0.05
+                ts_noise = np.random.normal(0, ts_std, time_series_data.shape)
+
+                target_std = np.std(target, axis=0) * 0.05
+                target_noise = np.random.normal(0, target_std, target.shape)
                 
                 # 確保增強後的目標仍為正值
                 aug_static[idx:idx+n_samples] = static_features + static_noise
