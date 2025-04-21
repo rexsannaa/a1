@@ -99,9 +99,7 @@ class OptimizedTrainer:
             total_loss += loss.item()
             total_mae += mae.item()
             batch_count += 1
-        
-        # 更新學習率
-        self.scheduler.step()
+
         
         # 返回平均損失和MAE
         return total_loss / batch_count, total_mae / batch_count
@@ -168,9 +166,9 @@ class OptimizedTrainer:
             # 打印進度
             epoch_time = time.time() - start_time
             print(f"Epoch {epoch+1}/{epochs} - {epoch_time:.2f}s - "
-                  f"loss: {train_loss:.6f} - val_loss: {val_loss:.6f} - "
-                  f"mae: {train_mae:.6f} - val_mae: {val_mae:.6f} - "
-                  f"lr: {current_lr:.6f}")
+                f"loss: {train_loss:.6f} - val_loss: {val_loss:.6f} - "
+                f"mae: {train_mae:.6f} - val_mae: {val_mae:.6f} - "
+                f"lr: {current_lr:.6f}")
             
             # 檢查是否為最佳模型
             if val_loss < best_val_loss:
@@ -183,24 +181,7 @@ class OptimizedTrainer:
                 if patience_counter >= patience:
                     print(f"早停! {patience}個epoch內沒有改善。")
                     break
-        
-        ## 如果使用SWA優化器，在訓練結束後更新BN統計量
-        #if isinstance(self.optimizer, optim.SWA):
-        #    print("更新SWA模型的BN統計量...")
-        #    self.optimizer.swap_swa_sgd()
-        #    # 更新BN統計量
-        #    with torch.no_grad():
-        #        for batch in train_loader:
-        #            static_features, time_series, _ = batch
-        #            static_features = static_features.to(self.device)
-        #            time_series = time_series.to(self.device)
-        #            self.model(static_features, time_series)
-        
-        # 加載最佳模型
-        if best_model is not None:
-            self.model.load_state_dict(best_model)
-            
-        return self.history
+    
 if __name__ == "__main__":
     import torch
     from torch.utils.data import DataLoader, TensorDataset
