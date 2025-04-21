@@ -16,8 +16,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import time
-from src.pinn_module import PINNModule
-from src.lstm_module import LSTMModule
+from src.pinn_module import PINNModule, SimplePINNModule  
+from src.lstm_module import LSTMModule, SimpleLSTMModule  
 
 
 

@@ -17,7 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-
 class SimplePINNModule(nn.Module):
     """簡化版物理信息神經網絡模塊"""
     def __init__(self, config):
