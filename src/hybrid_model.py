@@ -114,15 +114,15 @@ class HybridPINNLSTM(nn.Module):
             nn.Softmax(dim=1)
         )
         
-        # 改進：確保融合層也使用 LayerNorm（這裡之前可能漏掉了）
+        # 融合層 - 簡化並添加批標準化
         self.fusion_layer = nn.Sequential(
             nn.Linear(16 + 48, 32),
-            nn.LayerNorm(32),  # 替換為 LayerNorm
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2),
+            nn.BatchNorm1d(32),  # 使用BatchNorm替代LayerNorm以更好處理批次間差異
+            nn.ReLU(),
+            nn.Dropout(0.1),  # 減輕正則化
             nn.Linear(32, 16),
-            nn.LayerNorm(16),  # 替換為 LayerNorm
-            nn.LeakyReLU(0.1),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
             nn.Linear(16, 2)
         )
         
@@ -130,12 +130,18 @@ class HybridPINNLSTM(nn.Module):
         self._initialize_weights()
         
     def _initialize_weights(self):
-        """初始化網絡權重"""
+        """初始化網絡權重 - 使用更保守的初始化"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, nonlinearity='leaky_relu')
+                nn.init.xavier_normal_(m.weight)  # 使用更穩定的Xavier初始化
                 if m.bias is not None:
-                    nn.init.constant_(m.bias, 0.01)
+                    nn.init.zeros_(m.bias)  # 從零開始初始化偏置
+                    
+            # 特別處理最後一層，使其輸出接近目標均值
+            if isinstance(m, nn.Sequential) and isinstance(m[-1], nn.Linear) and m[-1].out_features == 2:
+                # 最後一層特殊初始化，使輸出接近0.05的目標均值
+                nn.init.normal_(m[-1].weight, mean=0, std=0.01)
+                nn.init.constant_(m[-1].bias, 0)  # 初始偏置為零
         
     def forward(self, static_features, time_series):
         """前向傳播
@@ -167,8 +173,10 @@ class HybridPINNLSTM(nn.Module):
         # 預測應變差
         delta_w_pred = self.fusion_layer(combined)
         
-        # 確保輸出為合理範圍的正值 (0.03-0.08 是合理的應變範圍)
-        delta_w_pred = torch.clamp(F.softplus(delta_w_pred), min=0.03, max=0.08)
+        # 使用更適合的方式確保輸出在合理範圍
+        # 移除softplus並修改clamp範圍，使用sigmoid確保輸出有更好的分布
+        # 縮放sigmoid輸出到合理的應變範圍
+        delta_w_pred = 0.03 + 0.05 * torch.sigmoid(delta_w_pred)
         
         # 返回預測的應變差和中間結果
         return {
@@ -273,8 +281,14 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-            # 改進：使用更穩健的Huber損失
-            loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.1)
+           # 使用均方誤差損失，對於這類回歸任務可能更適合
+            loss = F.mse_loss(delta_w_pred, targets)
+
+            # 添加額外的L2正則化損失，幫助模型泛化
+            l2_reg = 0
+            for param in self.model.parameters():
+                l2_reg += torch.norm(param, 2)
+            loss += 0.0005 * l2_reg  # 微小的L2正則化權重
             
             # 添加L1正則化
             l1_reg = 0
