@@ -16,6 +16,64 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class SimpleLSTMModule(nn.Module):
+    """簡化版長短期記憶網絡模塊"""
+    def __init__(self, config):
+        super(SimpleLSTMModule, self).__init__()
+        self.config = config
+        
+        # 使用單層單向LSTM
+        self.input_dim = config.ts_feature_dim
+        hidden_dim = 16  # 減少隱藏層大小
+        
+        self.lstm = nn.LSTM(
+            input_size=self.input_dim,
+            hidden_size=hidden_dim,
+            num_layers=1,  # 單層
+            batch_first=True,
+            bidirectional=False  # 單向
+        )
+        
+        # 直接輸出層
+        self.fc = nn.Linear(hidden_dim, 2)
+        
+        # 初始化權重
+        self._initialize_weights()
+        
+    def _initialize_weights(self):
+        """初始化權重"""
+        for name, param in self.lstm.named_parameters():
+            if 'weight' in name:
+                nn.init.orthogonal_(param)
+            elif 'bias' in name:
+                nn.init.constant_(param, 0.0)
+                
+        nn.init.xavier_uniform_(self.fc.weight)
+        nn.init.constant_(self.fc.bias, 0.01)
+    
+    def forward(self, time_series):
+        """前向傳播"""
+        # 通過LSTM層
+        lstm_out, _ = self.lstm(time_series)
+        
+        # 使用最後一個時間步的輸出
+        last_output = lstm_out[:, -1, :]
+        
+        # 輸出層
+        delta_w = F.softplus(self.fc(last_output)) * 0.1
+        
+        # 為保持與原模型接口一致，返回一個假的注意力權重
+        batch_size = time_series.shape[0]
+        seq_len = time_series.shape[1]
+        dummy_attention = torch.ones(batch_size, seq_len, 1) / seq_len
+        
+        return delta_w, dummy_attention
+    
+    def compute_sequence_loss(self, time_series, delta_w_pred):
+        """簡化的序列損失"""
+        # 為了相容性，保留但簡化損失計算
+        return torch.tensor(0.0, device=delta_w_pred.device)
+    
 
 class AttentionLayer(nn.Module):
     """自注意力層，增強重要時間點的特徵提取"""
