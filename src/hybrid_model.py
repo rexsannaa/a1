@@ -85,46 +85,49 @@ class HybridPINNLSTM(nn.Module):
         super(HybridPINNLSTM, self).__init__()
         self.config = config
         
-        # 改進：使用 LayerNorm 取代 BatchNorm
+        # 靜態特徵編碼器 - 使用更深層的網絡處理靜態特徵
         static_dim = config.static_dim
         self.static_encoder = nn.Sequential(
             nn.Linear(static_dim, 32),
-            nn.LayerNorm(32),  # 替換為 LayerNorm
-            nn.LeakyReLU(0.1),
+            nn.LayerNorm(32),
+            nn.GELU(),  # 使用GELU激活函數提高非線性能力
             nn.Dropout(0.2),
             nn.Linear(32, 24),
-            nn.LayerNorm(24),  # 替換為 LayerNorm
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2),
-            nn.Linear(24, 16),
+            nn.LayerNorm(24),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(24, 16)
         )
         
-        # LSTM 編碼器和注意力機制保持不變
+        # 時間序列編碼器 - 使用更強大的雙向LSTM
         self.ts_encoder = nn.LSTM(
             input_size=config.ts_feature_dim,
-            hidden_size=24,
+            hidden_size=32,  # 增加隱藏維度
             num_layers=2,
             batch_first=True,
             bidirectional=True,
             dropout=0.2
         )
         
+        # 更強大的注意力機制
         self.attention = nn.Sequential(
-            nn.Linear(48, 1),  # 雙向LSTM輸出維度為24*2=48
+            nn.Linear(64, 32),  # 雙向LSTM輸出維度為32*2=64
+            nn.Tanh(),
+            nn.Linear(32, 1),
             nn.Softmax(dim=1)
         )
         
-        # 融合層 - 簡化並添加批標準化
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(16 + 48, 32),
-            nn.LayerNorm(32),  # 使用LayerNorm替代BatchNorm，可以處理單樣本批次
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 16),
-            nn.LayerNorm(16),  # 使用LayerNorm替代BatchNorm
-            nn.ReLU(),
-            nn.Linear(16, 2)
-        )
+        # 融合層 - 使用殘差連接和更多層
+        self.fusion_layer1 = nn.Linear(16 + 64, 48)
+        self.layer_norm1 = nn.LayerNorm(48)
+        self.fusion_layer2 = nn.Linear(48, 32)
+        self.layer_norm2 = nn.LayerNorm(32)
+        self.fusion_layer3 = nn.Linear(32, 16)
+        self.layer_norm3 = nn.LayerNorm(16)
+        self.output_layer = nn.Linear(16, 2)
+        
+        # 使用特殊映射層處理異常值
+        self.anomaly_detector = nn.Linear(16 + 64, 1)
         
         # 初始化權重
         self._initialize_weights()
@@ -170,11 +173,34 @@ class HybridPINNLSTM(nn.Module):
         # 合併特徵
         combined = torch.cat([static_out, context_vector], dim=1)
         
-        # 使用融合層
-        out = self.fusion_layer(combined)
+        # 異常檢測分支
+        anomaly_score = torch.sigmoid(self.anomaly_detector(combined))
         
-        # 範圍控制：確保輸出落在合理範圍內
-        delta_w_pred = 0.04 + 0.02 * torch.tanh(out)
+        # 使用具有殘差連接的融合層
+        x1 = F.gelu(self.layer_norm1(self.fusion_layer1(combined)))
+        x2 = F.gelu(self.layer_norm2(self.fusion_layer2(x1) + x1[:, :32]))  # 部分殘差連接
+        x3 = F.gelu(self.layer_norm3(self.fusion_layer3(x2)))
+        out = self.output_layer(x3)
+        
+        # 範圍控制：讓模型有更大的輸出範圍，特別是能捕捉極端值
+        # 擴大訓練範圍並應用非線性變換
+        output_range = torch.tensor([0.03, 0.08]).to(out.device)  # 最小值和最大值
+        delta_w_pred = output_range[0] + (output_range[1] - output_range[0]) * torch.sigmoid(out)
+
+        # 為極端值預留空間
+        # 偵測可能的極端值（基於靜態特徵的差異）
+        static_stats = torch.std(static_features, dim=0)
+        extreme_indicator = torch.sum(torch.abs(static_features - torch.mean(static_features, dim=0)), dim=1)
+        extreme_factor = torch.sigmoid(extreme_indicator * 0.1).unsqueeze(1)
+
+        # 對可能的極端值進行額外拉伸
+        extreme_scaling = torch.ones_like(delta_w_pred)
+        extreme_scaling[:, 0] = 1.0 + extreme_factor.squeeze() * 0.5  # 對上升通道更敏感
+        delta_w_pred = delta_w_pred * extreme_scaling
+        
+        # 對異常值進行特殊處理
+        anomaly_factor = anomaly_score * 0.1  # 最多額外增加10%
+        delta_w_pred = base_output * (1.0 + anomaly_factor)
         
         # 返回預測的應變差和中間結果
         return {
@@ -257,10 +283,14 @@ class SimpleTrainer:
         total_mae = 0
         batch_count = 0
         
+        # 添加噪聲到靜態特徵，增強模型的泛化能力
+        def add_noise(tensor, noise_level=0.02):
+            return tensor + torch.randn_like(tensor) * noise_level
+        
         for batch in dataloader:
             static_features, time_series, targets = batch
             
-            # 檢查批次大小，如果只有1個樣本則跳過(BatchNorm需要至少2個樣本)
+            # 檢查批次大小，如果只有1個樣本則跳過
             if static_features.size(0) < 2:
                 continue
                 
@@ -269,6 +299,11 @@ class SimpleTrainer:
             time_series = time_series.to(self.device)
             targets = targets.to(self.device)
             
+            # 添加訓練噪聲
+            if self.training:
+                static_features = add_noise(static_features, 0.01)
+                time_series = add_noise(time_series, 0.01)
+            
             # 清除梯度
             self.optimizer.zero_grad()
             
@@ -276,25 +311,23 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-            # 使用均方誤差損失
-            loss = F.mse_loss(delta_w_pred, targets)
+            # 使用混合損失：MSE + Huber損失
+            mse_loss = F.mse_loss(delta_w_pred, targets)
+            huber_loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.1)
+            loss = 0.7 * mse_loss + 0.3 * huber_loss  # 組合損失
             
-            # 添加L2正則化
+            # 添加L2正則化但降低權重
             l2_reg = 0
             for param in self.model.parameters():
                 l2_reg += torch.norm(param, 2)
-            loss += 0.0005 * l2_reg
+            loss += 0.0001 * l2_reg  # 降低正則化權重
             
-            # 添加L1正則化
-            l1_reg = 0
-            for param in self.model.parameters():
-                l1_reg += torch.norm(param, 1)
-            loss += 0.0001 * l1_reg
-            
-            # 物理一致性損失
-            strain_correlation = torch.abs(delta_w_pred[:, 0] - delta_w_pred[:, 1])
-            physical_loss = torch.mean(strain_correlation) * 0.1
-            loss += physical_loss
+            # 物理一致性損失 - 優化版本
+            # 上升和下降應變應該有相關性
+            up_down_ratio = delta_w_pred[:, 0] / (delta_w_pred[:, 1] + 1e-6)
+            target_ratio = targets[:, 0] / (targets[:, 1] + 1e-6)
+            ratio_loss = F.mse_loss(torch.log(up_down_ratio + 1e-6), torch.log(target_ratio + 1e-6))
+            loss += 0.1 * ratio_loss
             
             # 反向傳播
             loss.backward()
