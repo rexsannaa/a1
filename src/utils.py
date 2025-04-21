@@ -323,12 +323,12 @@ def calculate_metrics(y_true, y_pred):
     return metrics
 
 
-def verify_physical_consistency(predictions, static_features, df):
+def verify_physical_consistency(predictions, pinn_out, df):
     """驗證預測結果的物理一致性
     
     Args:
         predictions: 預測結果
-        static_features: 靜態特徵
+        pinn_out: PINN輸出
         df: 原始數據DataFrame
         
     Returns:
@@ -345,15 +345,22 @@ def verify_physical_consistency(predictions, static_features, df):
     results['strain_correlation'] = strain_corr
     
     # 3. 檢查幾何參數與應變的關係
-    # 提取Die尺寸
-    die_sizes = df['Die'].values
-    strain_die_corr = np.corrcoef(die_sizes, predictions[:, 0] + predictions[:, 1])[0, 1]
-    results['die_strain_correlation'] = strain_die_corr
-    
-    # 4. 檢查Warpage與應變的關係
-    warpage = df['Total Warpage'].values
-    warpage_strain_corr = np.corrcoef(warpage, predictions[:, 0] + predictions[:, 1])[0, 1]
-    results['warpage_strain_correlation'] = warpage_strain_corr
+    # 在交叉驗證時，需要確保使用對應的子集數據
+    # 只有當預測樣本數和原始數據相同時才進行這項檢查
+    if len(predictions) == len(df):
+        # 提取Die尺寸
+        die_sizes = df['Die'].values
+        strain_die_corr = np.corrcoef(die_sizes, predictions[:, 0] + predictions[:, 1])[0, 1]
+        results['die_strain_correlation'] = strain_die_corr
+        
+        # 4. 檢查Warpage與應變的關係
+        warpage = df['Total Warpage'].values
+        warpage_strain_corr = np.corrcoef(warpage, predictions[:, 0] + predictions[:, 1])[0, 1]
+        results['warpage_strain_correlation'] = warpage_strain_corr
+    else:
+        # 如果是部分數據（交叉驗證的某一折），則跳過這些檢查
+        results['die_strain_correlation'] = None
+        results['warpage_strain_correlation'] = None
     
     return results
 

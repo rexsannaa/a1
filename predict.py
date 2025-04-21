@@ -140,7 +140,7 @@ def predict_batch(model, static_features, time_series, device):
     return results
 
 
-def evaluate_predictions(predictions, targets, df, data_processor):
+def evaluate_predictions(predictions, targets, df, data_processor, test_indices=None):
     """評估預測結果
     
     Args:
@@ -148,6 +148,7 @@ def evaluate_predictions(predictions, targets, df, data_processor):
         targets: 真實目標值
         df: 原始數據DataFrame
         data_processor: 數據處理器
+        test_indices: 測試資料的索引，用於交叉驗證
         
     Returns:
         評估指標字典
@@ -163,8 +164,8 @@ def evaluate_predictions(predictions, targets, df, data_processor):
     
     # 檢驗物理一致性
     physical_metrics = verify_physical_consistency(predictions['delta_w'], 
-                                                 predictions['pinn_out'], 
-                                                 df)
+                                                  predictions['pinn_out'], 
+                                                  df)
     
     # 計算Nf預測的評估指標
     nf_mse = mean_squared_error(np.log10(np.abs(nf_true)), np.log10(np.abs(predictions['nf'])))
@@ -302,12 +303,13 @@ def run_prediction(config, model_path, test_data_path=None, case_ids=None):
             print(f"預測第 {fold_idx+1}/{len(data)} 折...")
             test_data = fold['test']
             static_features, time_series, targets = test_data
+            test_indices = fold['test_indices']  # 獲取測試索引
             
             # 批次預測
             predictions = predict_batch(model, static_features, time_series, device)
             
-            # 評估結果
-            metrics, nf_true = evaluate_predictions(predictions, targets, df, data_processor)
+            # 評估結果，傳入測試索引
+            metrics, nf_true = evaluate_predictions(predictions, targets, df, data_processor, test_indices)
             fold_metrics.append(metrics)
             
             # 收集所有預測和目標
