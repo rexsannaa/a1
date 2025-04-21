@@ -115,37 +115,18 @@ class HybridPINNLSTM(nn.Module):
         # 編碼時間序列特徵 (LSTM分支)
         lstm_out, _ = self.ts_encoder(time_series)
         
-        # 多頭注意力機制
-        attention_outputs = []
-        attention_weights_list = []
+        # 應用注意力機制
+        attention_scores = self.attention(lstm_out)
+        attention_weights = attention_scores
         
-        for attention_layer in self.attention_layers:
-            # 計算注意力分數
-            attention_scores = attention_layer(lstm_out)
-            attention_weights = F.softmax(attention_scores, dim=1)
-            attention_weights_list.append(attention_weights)
-            
-            # 加權平均
-            context = torch.sum(attention_weights * lstm_out, dim=1)
-            attention_outputs.append(context)
-        
-        # 合併多頭注意力輸出
-        context_vector = torch.cat(attention_outputs, dim=1)
-        
-        # 取平均得到最終注意力權重 (用於可視化)
-        attention_weights = torch.mean(torch.stack(attention_weights_list), dim=0)
+        # 加權平均得到上下文向量
+        context_vector = torch.sum(attention_weights * lstm_out, dim=1)
         
         # 合併靜態和時間序列特徵
         combined = torch.cat([static_out, context_vector], dim=1)
         
         # 融合層處理
-        fused_features = self.fusion_layer(combined)
-        
-        # 預測delta_w
-        delta_w_raw = self.output_layer(fused_features)
-        
-        # 應用物理約束：確保delta_w為正值且在合理範圍內
-        delta_w_pred = F.softplus(delta_w_raw) * 0.1 + 0.03
+        delta_w_pred = self.fusion_layer(combined)
         
         # 返回預測的應變差和中間結果
         return {
@@ -408,7 +389,7 @@ class SimpleTrainer:
             self.history['val_loss'].append(val_loss)
             self.history['train_mae'].append(train_mae)
             self.history['val_mae'].append(val_mae)
-            self.history['learning_rates'].append(current_lr)
+            self.history['lr'].append(current_lr)
             
             # 打印訓練信息
             epoch_time = time.time() - start_time
