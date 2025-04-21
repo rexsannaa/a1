@@ -20,7 +20,7 @@
       "Acc. Equi. Strain Up",
       "Acc. Equi. Strain Down"
     ],
-    "use_augmentation": true,
+    "use_augmentation": false,
     "augmentation_factor": 5,
     "n_folds": 5,
     "pinn_hidden_dims": [
@@ -33,11 +33,11 @@
     "lstm_dropout": 0.1,
     "lstm_fc_dim": 8,
     "fusion_hidden_dim": 8,
-    "batch_size": 16,
-    "epochs": 200,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0005,
-    "patience": 20,
+    "batch_size": 8,
+    "epochs": 100,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0001,
+    "patience": 15,
     "data_loss_weight": 1.0,
     "physical_loss_weight": 0.2,
     "reg_loss_weight": 0.005,
@@ -49,5 +49,5 @@
     "results_dir": "results"
   },
   "metrics": {},
-  "timestamp": "2025-04-21 14:25:47"
+  "timestamp": "2025-04-21 14:38:54"
 }

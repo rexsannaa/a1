@@ -180,7 +180,10 @@ class OptimizedTrainer:
                 patience_counter += 1
                 if patience_counter >= patience:
                     print(f"早停! {patience}個epoch內沒有改善。")
-                    break
+                    # 加載最佳模型
+                    if best_model is not None:
+                        self.model.load_state_dict(best_model)
+                    return self.history  # 確保在早停時也返回history
     
 if __name__ == "__main__":
     import torch
@@ -249,16 +252,20 @@ if __name__ == "__main__":
     # 開始訓練
     print("開始訓練...")
     history = trainer.train(train_loader, val_loader, config.epochs)
-    
-    # 保存模型
-    model_manager = ModelManager()
-    model_manager.save_model(model, config, {}, "hybrid_model")
-    
-    # 可視化訓練歷史
-    vis_tools = VisualizationTools()
-    vis_tools.plot_training_history(
-        history,
-        save_path=f"{config.results_dir}/training_history.png"
-    )
-    
-    print("訓練完成!")  
+
+    # 確保history不為None
+    if history is not None:
+        # 保存模型
+        model_manager = ModelManager()
+        model_manager.save_model(model, config, {}, "hybrid_model")
+        
+        # 可視化訓練歷史
+        vis_tools = VisualizationTools()
+        vis_tools.plot_training_history(
+            history,
+            save_path=f"{config.results_dir}/training_history.png"
+        )
+        
+        print("訓練完成!")
+    else:
+        print("訓練過程中出現問題，沒有產生訓練歷史。")
