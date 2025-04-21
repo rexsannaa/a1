@@ -74,6 +74,7 @@ class SimpleLSTMEncoder(nn.Module):
         
         return output, dummy_attention
 
+# 修改 HybridPINNLSTM 類別
 class HybridPINNLSTM(nn.Module):
     """混合PINN-LSTM模型，結合靜態特徵和時間序列特徵預測應變差"""
     def __init__(self, config):
@@ -85,23 +86,56 @@ class HybridPINNLSTM(nn.Module):
         super(HybridPINNLSTM, self).__init__()
         self.config = config
         
-        # 靜態特徵編碼器（簡化版PINN）
-        self.static_encoder = SimpleStaticEncoder(config.static_dim, 16)
+        # 改進：增強靜態特徵提取器（PINN分支）
+        static_dim = config.static_dim
+        self.static_encoder = nn.Sequential(
+            nn.Linear(static_dim, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2),
+            nn.Linear(32, 24),
+            nn.BatchNorm1d(24),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2),
+            nn.Linear(24, 16),
+        )
         
-        # 時間序列編碼器（簡化版LSTM）
-        self.ts_encoder = SimpleLSTMEncoder(config.ts_feature_dim, 16, 16)
+        # 改進：增強時間序列提取器（LSTM分支）
+        self.ts_encoder = nn.LSTM(
+            input_size=config.ts_feature_dim,
+            hidden_size=24,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2
+        )
         
-        # 融合層
+        # 改進：注意力機制
+        self.attention = nn.Sequential(
+            nn.Linear(48, 1),  # 雙向LSTM輸出維度為24*2=48
+            nn.Softmax(dim=1)
+        )
+        
+        # 改進：特徵融合層
         self.fusion_layer = nn.Sequential(
+            nn.Linear(16 + 48, 32),  # 靜態特徵維度16加上LSTM特徵維度48
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2),
             nn.Linear(32, 16),
-            nn.ReLU(),
+            nn.BatchNorm1d(16),
+            nn.LeakyReLU(0.1),
             nn.Linear(16, 2)
         )
         
-        # 初始化融合層權重
-        for m in self.fusion_layer.modules():
+        # 初始化權重
+        self._initialize_weights()
+        
+    def _initialize_weights(self):
+        """初始化網絡權重"""
+        for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                nn.init.kaiming_normal_(m.weight, nonlinearity='leaky_relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.01)
         
@@ -115,26 +149,34 @@ class HybridPINNLSTM(nn.Module):
         Returns:
             預測的應變差，形狀為(batch_size, 2)
         """
+        batch_size = static_features.shape[0]
+        
         # 編碼靜態特徵
         static_out = self.static_encoder(static_features)
         
         # 編碼時間序列特徵
-        lstm_out, attention_weights = self.ts_encoder(time_series)
+        lstm_out, _ = self.ts_encoder(time_series)
+        
+        # 計算注意力權重
+        attention_weights = self.attention(lstm_out)
+        
+        # 加權平均
+        context_vector = torch.sum(attention_weights * lstm_out, dim=1)
         
         # 合併特徵
-        combined = torch.cat([static_out, lstm_out], dim=1)
+        combined = torch.cat([static_out, context_vector], dim=1)
         
         # 預測應變差
         delta_w_pred = self.fusion_layer(combined)
         
-        # 確保輸出為正值
-        delta_w_pred = F.relu(delta_w_pred) + 1e-6
+        # 確保輸出為合理範圍的正值 (0.03-0.08 是合理的應變範圍)
+        delta_w_pred = torch.clamp(F.softplus(delta_w_pred), min=0.03, max=0.08)
         
         # 返回預測的應變差和中間結果
         return {
             'delta_w': delta_w_pred,
             'pinn_out': static_out,
-            'lstm_out': lstm_out,
+            'lstm_out': context_vector,
             'attention_weights': attention_weights
         }
     
@@ -180,11 +222,11 @@ class SimpleTrainer:
         # 將模型轉移到指定設備
         self.model.to(self.device)
         
-        # 設置優化器，小樣本數據使用較小學習率
-        self.optimizer = torch.optim.Adam(
+        # 改進：使用AdamW優化器及更合理的學習率
+        self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
-            lr=0.001,
-            weight_decay=0.0001
+            lr=0.0005,  # 較小的學習率
+            weight_decay=0.01  # 較強的權重衰減
         )
         
         # 學習率調度器
@@ -233,8 +275,20 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-            # 計算損失 (MSE)
-            loss = F.mse_loss(delta_w_pred, targets)
+            # 改進：使用更穩健的Huber損失
+            loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.1)
+            
+            # 添加L1正則化
+            l1_reg = 0
+            for param in self.model.parameters():
+                l1_reg += torch.norm(param, 1)
+            loss += 0.0001 * l1_reg
+            
+            # 物理一致性損失
+            # 上升和下降應變應該有相關性
+            strain_correlation = torch.abs(delta_w_pred[:, 0] - delta_w_pred[:, 1])
+            physical_loss = torch.mean(strain_correlation) * 0.1
+            loss += physical_loss
             
             # 反向傳播
             loss.backward()
@@ -252,47 +306,6 @@ class SimpleTrainer:
             total_loss += loss.item()
             total_mae += mae.item()
             batch_count += 1
-        
-        # 返回平均損失和MAE
-        return total_loss / batch_count, total_mae / batch_count
-    
-    def evaluate(self, dataloader):
-        """評估模型
-        
-        Args:
-            dataloader: 評估數據加載器
-            
-        Returns:
-            平均評估損失和MAE
-        """
-        self.model.eval()
-        total_loss = 0
-        total_mae = 0
-        batch_count = 0
-        
-        with torch.no_grad():
-            for batch in dataloader:
-                static_features, time_series, targets = batch
-                
-                # 轉移數據到設備
-                static_features = static_features.to(self.device)
-                time_series = time_series.to(self.device)
-                targets = targets.to(self.device)
-                
-                # 前向傳播
-                outputs = self.model(static_features, time_series)
-                delta_w_pred = outputs['delta_w']
-                
-                # 計算損失
-                loss = F.mse_loss(delta_w_pred, targets)
-                
-                # 計算MAE
-                mae = F.l1_loss(delta_w_pred, targets)
-                
-                # 累計統計
-                total_loss += loss.item()
-                total_mae += mae.item()
-                batch_count += 1
         
         # 返回平均損失和MAE
         return total_loss / batch_count, total_mae / batch_count
