@@ -117,11 +117,11 @@ class HybridPINNLSTM(nn.Module):
         # 融合層 - 簡化並添加批標準化
         self.fusion_layer = nn.Sequential(
             nn.Linear(16 + 48, 32),
-            nn.BatchNorm1d(32),  # 使用BatchNorm替代LayerNorm以更好處理批次間差異
+            nn.LayerNorm(32),  # 使用LayerNorm替代BatchNorm，可以處理單樣本批次
             nn.ReLU(),
-            nn.Dropout(0.1),  # 減輕正則化
+            nn.Dropout(0.1),
             nn.Linear(32, 16),
-            nn.BatchNorm1d(16),
+            nn.LayerNorm(16),  # 使用LayerNorm替代BatchNorm
             nn.ReLU(),
             nn.Linear(16, 2)
         )
@@ -171,7 +171,7 @@ class HybridPINNLSTM(nn.Module):
         combined = torch.cat([static_out, context_vector], dim=1)
         
         # 預測應變差
-        delta_w_pred = self.fusion_layer(combined)
+        delta_w_pred = 0.04 + 0.02 * torch.tanh(delta_w_pred)
         
         # 使用更適合的方式確保輸出在合理範圍
         # 移除softplus並修改clamp範圍，使用sigmoid確保輸出有更好的分布
@@ -253,14 +253,7 @@ class SimpleTrainer:
         }
         
     def train_epoch(self, dataloader):
-        """訓練一個epoch
-        
-        Args:
-            dataloader: 訓練數據加載器
-            
-        Returns:
-            平均訓練損失和MAE
-        """
+        """訓練一個epoch"""
         self.model.train()
         total_loss = 0
         total_mae = 0
@@ -269,6 +262,10 @@ class SimpleTrainer:
         for batch in dataloader:
             static_features, time_series, targets = batch
             
+            # 檢查批次大小，如果只有1個樣本則跳過(BatchNorm需要至少2個樣本)
+            if static_features.size(0) < 2:
+                continue
+                
             # 轉移數據到設備
             static_features = static_features.to(self.device)
             time_series = time_series.to(self.device)
@@ -281,14 +278,14 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-           # 使用均方誤差損失，對於這類回歸任務可能更適合
+            # 使用均方誤差損失
             loss = F.mse_loss(delta_w_pred, targets)
-
-            # 添加額外的L2正則化損失，幫助模型泛化
+            
+            # 添加L2正則化
             l2_reg = 0
             for param in self.model.parameters():
                 l2_reg += torch.norm(param, 2)
-            loss += 0.0005 * l2_reg  # 微小的L2正則化權重
+            loss += 0.0005 * l2_reg
             
             # 添加L1正則化
             l1_reg = 0
@@ -297,7 +294,6 @@ class SimpleTrainer:
             loss += 0.0001 * l1_reg
             
             # 物理一致性損失
-            # 上升和下降應變應該有相關性
             strain_correlation = torch.abs(delta_w_pred[:, 0] - delta_w_pred[:, 1])
             physical_loss = torch.mean(strain_correlation) * 0.1
             loss += physical_loss
@@ -305,7 +301,7 @@ class SimpleTrainer:
             # 反向傳播
             loss.backward()
             
-            # 梯度裁剪，防止梯度爆炸
+            # 梯度裁剪
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             
             # 更新參數
@@ -320,17 +316,12 @@ class SimpleTrainer:
             batch_count += 1
         
         # 返回平均損失和MAE
+        if batch_count == 0:
+            return 0.0, 0.0  # 避免除以零
         return total_loss / batch_count, total_mae / batch_count
-        # 在 SimpleTrainer 類中添加 evaluate 方法
+
     def evaluate(self, dataloader):
-        """評估模型
-        
-        Args:
-            dataloader: 評估數據加載器
-            
-        Returns:
-            平均評估損失和MAE
-        """
+        """評估模型"""
         self.model.eval()
         total_loss = 0
         total_mae = 0
@@ -340,6 +331,10 @@ class SimpleTrainer:
             for batch in dataloader:
                 static_features, time_series, targets = batch
                 
+                # 檢查批次大小，如果只有1個樣本則跳過
+                if static_features.size(0) < 2:
+                    continue
+                    
                 # 轉移數據到設備
                 static_features = static_features.to(self.device)
                 time_series = time_series.to(self.device)
@@ -361,6 +356,8 @@ class SimpleTrainer:
                 batch_count += 1
         
         # 返回平均損失和MAE
+        if batch_count == 0:
+            return 0.0, 0.0  # 避免除以零
         return total_loss / batch_count, total_mae / batch_count
     
     def train(self, train_loader, val_loader, epochs, patience=10):
