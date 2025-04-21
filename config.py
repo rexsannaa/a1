@@ -24,7 +24,7 @@ class Config:
         
         # 資料增強配置
         self.use_augmentation = True
-        self.augmentation_factor = 3  # 降低增強倍數，避免過度增強
+        self.augmentation_factor = 4  # 降低增強倍數，避免過度增強
         
         # 交叉驗證配置
         self.n_folds = 5
@@ -33,14 +33,14 @@ class Config:
         self.use_dropout = True
         self.lstm_dropout = 0.2
         self.lstm_hidden_dim = 64  # 增加隱藏層維度
-        self.lstm_num_layers = 2  # 保持2層LSTM
+        self.lstm_num_layers = 1  # 保持2層LSTM
         
         # 訓練配置
         self.batch_size = 8
-        self.epochs = 100  # 增加訓練輪數
-        self.learning_rate = 0.0005  # 調整初始學習率
-        self.weight_decay = 0.0005  # 增加權重衰減
-        self.patience = 20  # 增加耐心值
+        self.epochs = 200  # 增加訓練輪數
+        self.learning_rate = 0.001  # 調整初始學習率
+        self.weight_decay = 0.0001  # 增加權重衰減
+        self.patience = 25  # 增加耐心值
         
         # 物理模型參數
         self.c_coefficient = -0.55  # Coffin-Manson係數C

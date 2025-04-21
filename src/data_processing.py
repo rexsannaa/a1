@@ -160,8 +160,8 @@ class DataProcessor:
         
         return static_norm, time_series_norm, target_norm
     
-    def augment_data(self, static_features, time_series_data, target, factor=2):
-        """增強版數據增強方法，適合小樣本(81筆)
+    def augment_data(self, static_features, time_series_data, target, factor=3):
+        """增強數據增強方法，專為小樣本銲錫點疲勞壽命預測設計
         
         Args:
             static_features: 靜態特徵
@@ -188,67 +188,112 @@ class DataProcessor:
         target_mean = np.mean(target, axis=0)
         target_std = np.std(target, axis=0)
         
-        # 增強策略組合
+        # 獲取最小和最大目標值，用於限制增強數據的範圍
+        target_min = np.min(target, axis=0) * 0.8  # 允許稍微小一些
+        target_max = np.max(target, axis=0) * 1.2  # 允許稍微大一些
+        
+        # 多種增強策略
         for i in range(1, factor):
             idx = n_samples * i
+            strategy = i % 4  # 使用4種不同的增強策略
             
-            # 策略1: 高斯噪聲 (溫和噪聲)
-            if i % 3 == 0:
-                # 對靜態特徵添加不同程度的噪聲
-                noise_level = np.random.uniform(0.005, 0.02)
-                static_noise = np.random.normal(0, noise_level, static_features.shape)
-                aug_static[idx:idx+n_samples] = static_features + static_noise
-                
-                # 對時間序列添加相關噪聲，保持時間相關性
-                for j in range(time_series_data.shape[1]):
-                    ts_noise = np.random.normal(0, noise_level * (1 - j/time_series_data.shape[1]),
-                                            (n_samples, time_series_data.shape[2]))
-                    aug_time_series[idx:idx+n_samples, j, :] = time_series_data[:, j, :] + ts_noise
-                
-                # 對應的目標值噪聲
-                target_noise = np.random.normal(0, noise_level * 0.5, target.shape)
-                aug_target[idx:idx+n_samples] = target + target_noise
-                
-            # 策略2: 特徵尺度縮放 (模擬不同尺寸的結構)
-            elif i % 3 == 1:
-                # 生成縮放因子
-                scale_factor = np.random.uniform(0.95, 1.05, (n_samples, 1))
-                
-                # 縮放靜態特徵 (只縮放物理尺寸，保持warpage不變)
-                scaled_static = static_features.copy()
-                scaled_static[:, :4] = scaled_static[:, :4] * scale_factor
-                aug_static[idx:idx+n_samples] = scaled_static
-                
-                # 縮放時間序列 (保持物理一致性)
-                scale_factor_ts = np.repeat(scale_factor, time_series_data.shape[2], axis=1)
-                scaled_ts = time_series_data.copy()
-                for j in range(time_series_data.shape[1]):
-                    scaled_ts[:, j, :] = scaled_ts[:, j, :] * (1 - (1 - scale_factor) * (j/time_series_data.shape[1]))
-                aug_time_series[idx:idx+n_samples] = scaled_ts
-                
-                # 相應調整目標值 (保持物理比例)
-                scale_factor_target = np.power(scale_factor, 0.8)  # 非線性關係
-                aug_target[idx:idx+n_samples] = target * scale_factor_target
-                
-            # 策略3: 內插增強 (生成現有樣本之間的新樣本)
-            else:
-                # 隨機選擇樣本對進行內插
+            if strategy == 0:
+                # 策略1: 平滑噪聲 - 對所有特徵添加相關噪聲
+                for j in range(n_samples):
+                    # 生成一個共享的噪聲基礎
+                    base_noise = np.random.normal(0, 0.01)
+                    
+                    # 對靜態特徵添加特定噪聲
+                    static_noise = np.random.normal(0, 0.01, static_features.shape[1]) + base_noise
+                    aug_static[idx+j] = static_features[j] + static_noise
+                    
+                    # 對時間序列添加時間相關的噪聲
+                    time_noise_base = np.random.normal(0, 0.01, time_series_data.shape[2]) + base_noise
+                    for t in range(time_series_data.shape[1]):
+                        # 噪聲在時間上是相關的
+                        time_noise = time_noise_base * (1 - 0.1 * t / time_series_data.shape[1])
+                        aug_time_series[idx+j, t, :] = time_series_data[j, t, :] + time_noise
+                    
+                    # 目標值噪聲，與基礎噪聲相關但較小
+                    target_noise = np.random.normal(0, 0.005, target.shape[1]) + base_noise * 0.3
+                    aug_target[idx+j] = np.clip(
+                        target[j] + target_noise,
+                        target_min,
+                        target_max
+                    )
+            
+            elif strategy == 1:
+                # 策略2: 縮放增強 - 模擬材料特性變化
+                for j in range(n_samples):
+                    # 生成縮放因子，接近1
+                    scale_factor = np.random.uniform(0.9, 1.1)
+                    
+                    # 縮放靜態特徵，但保持某些物理限制
+                    scaled_static = static_features[j].copy()
+                    # 只縮放Die, Stud, Mold等幾何參數，不縮放Warpage
+                    scaled_static[:4] = scaled_static[:4] * scale_factor
+                    aug_static[idx+j] = scaled_static
+                    
+                    # 對時間序列應用縮放，模擬材料特性變化
+                    aug_time_series[idx+j] = time_series_data[j] * scale_factor
+                    
+                    # 對目標值應用相應的縮放
+                    # 應變與幾何尺寸存在非線性關係，使用非線性函數
+                    target_scale = 1.0 / (scale_factor ** 0.7)  # 非線性關係
+                    aug_target[idx+j] = np.clip(
+                        target[j] * target_scale,
+                        target_min,
+                        target_max
+                    )
+            
+            elif strategy == 2:
+                # 策略3: 插值增強 - 生成樣本之間的新數據點
                 for j in range(n_samples):
                     # 隨機選擇另一個樣本
                     k = (j + np.random.randint(1, n_samples)) % n_samples
-                    # 內插比例
-                    alpha = np.random.uniform(0.2, 0.8)
                     
-                    # 內插靜態特徵
-                    aug_static[idx+j] = static_features[j] * alpha + static_features[k] * (1-alpha)
+                    # 插值比例
+                    alpha = np.random.uniform(0.3, 0.7)
                     
-                    # 內插時間序列，保持時間相關性
-                    aug_time_series[idx+j] = time_series_data[j] * alpha + time_series_data[k] * (1-alpha)
+                    # 線性插值靜態特徵
+                    aug_static[idx+j] = static_features[j] * alpha + static_features[k] * (1 - alpha)
                     
-                    # 內插目標值
-                    aug_target[idx+j] = target[j] * alpha + target[k] * (1-alpha)
+                    # 插值時間序列
+                    aug_time_series[idx+j] = time_series_data[j] * alpha + time_series_data[k] * (1 - alpha)
+                    
+                    # 插值目標值
+                    aug_target[idx+j] = target[j] * alpha + target[k] * (1 - alpha)
+            
+            else:
+                # 策略4: 物理關係增強 - 根據物理關係模擬數據變化
+                for j in range(n_samples):
+                    # 複製原始特徵
+                    new_static = static_features[j].copy()
+                    new_time_series = time_series_data[j].copy()
+                    
+                    # 修改PCB厚度 (索引3)，這會影響應變
+                    pcb_factor = np.random.uniform(0.8, 1.2)
+                    new_static[3] = new_static[3] * pcb_factor
+                    
+                    # 調整Warpage (索引4和5)，與PCB厚度成反比關係
+                    warpage_factor = 1.0 / (pcb_factor ** 0.5)  # 非線性關係
+                    new_static[4:6] = new_static[4:6] * warpage_factor
+                    
+                    # 調整時間序列數據，反映材料特性變化
+                    new_time_series = new_time_series * (1 + (pcb_factor - 1) * 0.3)
+                    
+                    # 保存新特徵
+                    aug_static[idx+j] = new_static
+                    aug_time_series[idx+j] = new_time_series
+                    
+                    # 根據材料力學關係調整目標應變
+                    # 厚度越小，應變通常越大
+                    strain_factor = 1.0 / (pcb_factor ** 0.6)
+                    new_target = target[j] * strain_factor
+                    
+                    # 確保在合理範圍內
+                    aug_target[idx+j] = np.clip(new_target, target_min, target_max)
         
-        # 輸出增強後的數據量
         print(f"數據增強: 從 {n_samples} 筆增加到 {len(aug_static)} 筆")
         
         return aug_static, aug_time_series, aug_target

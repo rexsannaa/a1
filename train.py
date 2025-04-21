@@ -228,7 +228,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='混合PINN-LSTM模型訓練')
     parser.add_argument('--fold', type=int, default=-1, 
                         help='要訓練的特定折索引，-1表示訓練所有折')
-    parser.add_argument('--epochs', type=int, default=50, 
+    parser.add_argument('--epochs', type=int, default=200, 
                         help='訓練輪數')
     parser.add_argument('--augment', action='store_true', 
                         help='是否使用數據增強')

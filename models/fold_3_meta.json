@@ -21,20 +21,22 @@
       "Acc. Equi. Strain Down"
     ],
     "use_augmentation": true,
-    "augmentation_factor": 2,
+    "augmentation_factor": 4,
     "n_folds": 5,
     "use_dropout": true,
     "lstm_dropout": 0.2,
+    "lstm_hidden_dim": 64,
+    "lstm_num_layers": 1,
     "batch_size": 8,
-    "epochs": 50,
+    "epochs": 200,
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
-    "patience": 10,
+    "patience": 25,
     "c_coefficient": -0.55,
     "m_exponent": 1.36,
     "model_save_path": "models/hybrid_model.pt",
     "results_dir": "results"
   },
   "metrics": {},
-  "timestamp": "2025-04-22 00:23:29"
+  "timestamp": "2025-04-22 00:56:30"
 }

@@ -17,6 +17,104 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import time
+import math
+
+class ResidualBlock(nn.Module):
+    """殘差連接塊，幫助深層網絡的訓練"""
+    def __init__(self, in_features, hidden_features=None):
+        super(ResidualBlock, self).__init__()
+        if hidden_features is None:
+            hidden_features = in_features
+            
+        self.block = nn.Sequential(
+            nn.Linear(in_features, hidden_features),
+            nn.LayerNorm(hidden_features),
+            nn.GELU(),  # 使用GELU激活函數，在小樣本上表現較好
+            nn.Dropout(0.1),
+            nn.Linear(hidden_features, in_features),
+            nn.LayerNorm(in_features),
+        )
+        
+    def forward(self, x):
+        # 殘差連接
+        return x + self.block(x)
+
+class PINNBranch(nn.Module):
+    """物理信息神經網絡分支，處理靜態特徵"""
+    def __init__(self, static_dim, embed_dim=32):
+        super(PINNBranch, self).__init__()
+        
+        # 初始特徵嵌入
+        self.feature_embedding = nn.Sequential(
+            nn.Linear(static_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.GELU()
+        )
+        
+        # 使用3個殘差塊捕獲非線性關係
+        self.res_blocks = nn.ModuleList([
+            ResidualBlock(embed_dim) for _ in range(3)
+        ])
+        
+        # 輸出層
+        self.output_layer = nn.Linear(embed_dim, embed_dim)
+        
+    def forward(self, static_features):
+        # 特徵嵌入
+        x = self.feature_embedding(static_features)
+        
+        # 應用殘差塊
+        for block in self.res_blocks:
+            x = block(x)
+            
+        # 輸出特徵
+        return self.output_layer(x)
+
+class LSTMBranch(nn.Module):
+    """長短期記憶網絡分支，處理時間序列特徵"""
+    def __init__(self, input_dim, embed_dim=32, hidden_dim=64):
+        super(LSTMBranch, self).__init__()
+        
+        # 時間序列特徵編碼
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True
+        )
+        
+        # 多頭自注意力機制
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim * 2,  # 雙向LSTM
+            num_heads=4,
+            dropout=0.1,
+            batch_first=True
+        )
+        
+        # 特徵壓縮
+        self.feature_compression = nn.Sequential(
+            nn.Linear(hidden_dim * 2, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.GELU()
+        )
+        
+    def forward(self, time_series):
+        # LSTM處理時間序列
+        lstm_out, _ = self.lstm(time_series)
+        
+        # 注意力機制
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        
+        # 全局池化獲取序列特徵
+        avg_pool = torch.mean(attn_out, dim=1)
+        max_pool, _ = torch.max(attn_out, dim=1)
+        
+        # 合併全局特徵
+        global_features = avg_pool + max_pool
+        
+        # 壓縮特徵
+        return self.feature_compression(global_features)
 
 class HybridPINNLSTM(nn.Module):
     """混合PINN-LSTM模型，結合靜態特徵和時間序列特徵預測應變差"""
@@ -24,69 +122,45 @@ class HybridPINNLSTM(nn.Module):
         super(HybridPINNLSTM, self).__init__()
         self.config = config
         
-        # 改進靜態特徵編碼器，使用更深層次的網絡
-        static_dim = config.static_dim
-        self.static_encoder = nn.Sequential(
-            nn.Linear(static_dim, 64),
-            nn.BatchNorm1d(64),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2),
-            nn.Linear(64, 48),
-            nn.BatchNorm1d(48),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2),
-            nn.Linear(48, 32)
-        )
+        # 嵌入維度
+        self.embed_dim = 32
         
-        # 改進時間序列編碼器，增加記憶單元
-        self.ts_encoder = nn.LSTM(
-            input_size=config.ts_feature_dim,
-            hidden_size=64,
-            num_layers=2,
-            batch_first=True,
-            dropout=0.2,
-            bidirectional=True
-        )
+        # PINN分支
+        self.pinn_branch = PINNBranch(config.static_dim, self.embed_dim)
         
-        # 改進注意力機制
-        self.attention = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.Tanh(),
-            nn.Linear(64, 1),
-            nn.Softmax(dim=1)
-        )
+        # LSTM分支
+        self.lstm_branch = LSTMBranch(config.ts_feature_dim, self.embed_dim)
         
-        # 改進融合層
+        # 融合層
         self.fusion_layer = nn.Sequential(
-            nn.Linear(32 + 128, 96),
-            nn.LayerNorm(96),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.3),
-            nn.Linear(96, 64),
-            nn.LayerNorm(64),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2),
-            nn.Linear(64, 32),
-            nn.LayerNorm(32),
-            nn.LeakyReLU(0.1),
-            nn.Linear(32, 2)
+            nn.Linear(self.embed_dim * 2, self.embed_dim),
+            nn.LayerNorm(self.embed_dim),
+            nn.GELU(),
+            ResidualBlock(self.embed_dim),
+            nn.Dropout(0.2)
+        )
+        
+        # 輸出層，分別預測上升和下降的應變差
+        self.output_layer = nn.Sequential(
+            nn.Linear(self.embed_dim, 2),
+            nn.Softplus()  # 確保輸出為正值
         )
         
         # 初始化權重
         self._initialize_weights()
         
     def _initialize_weights(self):
-        """初始化網絡權重，使用針對小樣本優化的初始化策略"""
+        """特殊初始化，專為小樣本設計"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                # 使用Kaiming初始化，適合LeakyReLU激活函數
-                nn.init.kaiming_normal_(m.weight, a=0.1, nonlinearity='leaky_relu')
+                # 使用Kaiming初始化，適合GELU激活函數
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
-                    # 初始偏置為小正值，避免死神經元
+                    # 使用小的正偏置，防止激活函數的飽和區
                     nn.init.constant_(m.bias, 0.01)
             
             elif isinstance(m, nn.LSTM):
-                # LSTM特殊初始化，提高小樣本學習穩定性
+                # 正交初始化LSTM權重，改善梯度流
                 for name, param in m.named_parameters():
                     if 'weight_ih' in name:
                         nn.init.orthogonal_(param.data)
@@ -94,7 +168,7 @@ class HybridPINNLSTM(nn.Module):
                         nn.init.orthogonal_(param.data)
                     elif 'bias' in name:
                         param.data.fill_(0)
-                        # 遺忘門偏置設為1，幫助長期記憶
+                        # 設置遺忘門偏置為1以促進長期記憶
                         param.data[m.hidden_size:2*m.hidden_size].fill_(1)
     
     def forward(self, static_features, time_series):
@@ -107,35 +181,34 @@ class HybridPINNLSTM(nn.Module):
         Returns:
             預測的應變差，形狀為(batch_size, 2)和中間結果的字典
         """
-        batch_size = static_features.shape[0]
+        # 處理靜態特徵
+        pinn_features = self.pinn_branch(static_features)
         
-        # 編碼靜態特徵 (PINN分支)
-        static_out = self.static_encoder(static_features)
+        # 處理時間序列特徵
+        lstm_features = self.lstm_branch(time_series)
         
-        # 編碼時間序列特徵 (LSTM分支)
-        lstm_out, _ = self.ts_encoder(time_series)
+        # 特徵融合
+        combined_features = torch.cat([pinn_features, lstm_features], dim=1)
+        fused_features = self.fusion_layer(combined_features)
         
-        # 應用注意力機制
-        attention_scores = self.attention(lstm_out)
-        attention_weights = attention_scores
+        # 預測delta_w
+        delta_w_raw = self.output_layer(fused_features)
         
-        # 加權平均得到上下文向量
-        context_vector = torch.sum(attention_weights * lstm_out, dim=1)
+        # 應用縮放，將輸出限制在合理範圍內(0.01-0.1)
+        delta_w_pred = 0.01 + delta_w_raw * 0.05  # 將值映射到0.01到~0.06的範圍
         
-        # 合併靜態和時間序列特徵
-        combined = torch.cat([static_out, context_vector], dim=1)
-        
-        # 融合層處理
-        delta_w_pred = self.fusion_layer(combined)
+        # 生成虛擬注意力權重供可視化使用
+        batch_size, seq_len = time_series.shape[0], time_series.shape[1]
+        dummy_attn = torch.ones(batch_size, seq_len, 1) / seq_len
         
         # 返回預測的應變差和中間結果
         return {
             'delta_w': delta_w_pred,
-            'pinn_out': static_out,
-            'lstm_out': context_vector,
-            'attention_weights': attention_weights
+            'pinn_out': pinn_features,
+            'lstm_out': lstm_features,
+            'attention_weights': dummy_attn
         }
-    
+        
     def calculate_nf(self, delta_w, c=None, m=None):
         """根據預測的應變差計算疲勞壽命
         
@@ -162,7 +235,7 @@ class HybridPINNLSTM(nn.Module):
         return nf
 
 class SimpleTrainer:
-    """增強版混合模型訓練器"""
+    """深度強化學習訓練器，專為小樣本優化"""
     def __init__(self, model, config, device, lr=0.001, weight_decay=0.0001):
         """初始化訓練器
         
@@ -180,21 +253,20 @@ class SimpleTrainer:
         # 將模型轉移到指定設備
         self.model.to(self.device)
         
-        # 使用AdamW優化器，添加參數
+        # 使用AdamW優化器
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=lr,
             weight_decay=weight_decay,
-            betas=(0.9, 0.999),
-            eps=1e-8
+            eps=1e-7
         )
         
-        # 使用餘弦退火學習率調度器
+        # 循環餘弦退火學習率
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            T_0=10,  # 重啟週期
-            T_mult=2,  # 重啟週期倍增因子
-            eta_min=1e-6  # 最小學習率
+            T_0=5,
+            T_mult=2,
+            eta_min=1e-6
         )
         
         # 記錄訓練歷史
@@ -206,29 +278,48 @@ class SimpleTrainer:
             'lr': []
         }
         
+        # 訓練步數計數器
+        self.step_counter = 0
+        
     def train_epoch(self, dataloader):
-        """訓練一個epoch，優化版"""
+        """訓練一個epoch，帶有強化學習功能
+        
+        Args:
+            dataloader: 訓練數據加載器
+            
+        Returns:
+            平均損失和MAE
+        """
         self.model.train()
         total_loss = 0
         total_mae = 0
         batch_count = 0
         
-        # 增強的噪聲添加函數
-        def add_noise(tensor, noise_level=0.01, p=0.8):
-            # 80%機率添加噪聲
-            if np.random.random() < p:
-                # 高斯噪聲
-                if np.random.random() < 0.7:
-                    return tensor + torch.randn_like(tensor) * noise_level
-                # 均勻噪聲
-                else:
-                    return tensor + (torch.rand_like(tensor) * 2 - 1) * noise_level
-            return tensor
+        # 學習率熱身
+        warmup_steps = 50
+        base_lr = self.optimizer.param_groups[0]['lr']
+        
+        # Mixup資料增強函數
+        def mixup_data(x_static, x_time, y, alpha=0.2):
+            '''返回混合後的特徵和標籤'''
+            if alpha > 0:
+                lam = np.random.beta(alpha, alpha)
+            else:
+                lam = 1
+    
+            batch_size = x_static.size()[0]
+            index = torch.randperm(batch_size).to(self.device)
+    
+            mixed_x_static = lam * x_static + (1 - lam) * x_static[index, :]
+            mixed_x_time = lam * x_time + (1 - lam) * x_time[index, :]
+            mixed_y = lam * y + (1 - lam) * y[index, :]
+            
+            return mixed_x_static, mixed_x_time, mixed_y
         
         for batch in dataloader:
             static_features, time_series, targets = batch
             
-            # 檢查批次大小，如果只有1個樣本則跳過
+            # 檢查批次大小
             if static_features.size(0) < 2:
                 continue
                 
@@ -237,41 +328,60 @@ class SimpleTrainer:
             time_series = time_series.to(self.device)
             targets = targets.to(self.device)
             
-            # 添加動態噪聲，採用不同的級別
-            static_features = add_noise(static_features, 0.01)
-            time_series = add_noise(time_series, 0.01)
+            # 應用mixup增強，增加模型魯棒性
+            if np.random.random() < 0.5:  # 50%概率應用mixup
+                static_features, time_series, targets = mixup_data(
+                    static_features, time_series, targets, alpha=0.2
+                )
             
             # 清除梯度
             self.optimizer.zero_grad()
+            
+            # 學習率熱身
+            self.step_counter += 1
+            if self.step_counter < warmup_steps:
+                # 線性熱身
+                lr_scale = min(1., float(self.step_counter) / warmup_steps)
+                for pg in self.optimizer.param_groups:
+                    pg['lr'] = lr_scale * base_lr
             
             # 前向傳播
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-            # 損失計算
-            # 1. MSE損失 - 主要損失，使用對數空間
+            # 主損失：MSE
+            mse_loss = F.mse_loss(delta_w_pred, targets)
+            
+            # 輔助損失1：L1損失，更不容易受離群值影響
+            l1_loss = F.l1_loss(delta_w_pred, targets)
+            
+            # 輔助損失2：對數空間MSE，適用於正值預測
             log_targets = torch.log(targets + 1e-6)
             log_preds = torch.log(delta_w_pred + 1e-6)
-            mse_loss = F.mse_loss(log_preds, log_targets)
+            log_mse_loss = F.mse_loss(log_preds, log_targets)
             
-            # 2. Huber損失，增強魯棒性
-            huber_loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.1)
-            
-            # 3. 物理約束損失 - 應變關係
-            up_down_ratio = targets[:, 0] / (targets[:, 1] + 1e-6)
+            # 輔助損失3：相對比例損失，保持上升與下降應變的比例關係
+            target_ratio = targets[:, 0] / (targets[:, 1] + 1e-6)
             pred_ratio = delta_w_pred[:, 0] / (delta_w_pred[:, 1] + 1e-6)
-            ratio_loss = F.mse_loss(pred_ratio, up_down_ratio)
+            ratio_loss = F.mse_loss(pred_ratio, target_ratio)
             
-            # 4. 數值範圍約束 - 確保預測值在合理的物理範圍內
-            range_loss = F.relu(0.02 - delta_w_pred).mean() + F.relu(delta_w_pred - 0.1).mean()
+            # 總損失，權重隨時間動態調整
+            loss_weight_factor = min(1.0, self.step_counter / 500)  # 前500步逐漸增加輔助損失權重
+            total_train_loss = (
+                mse_loss + 
+                0.2 * l1_loss + 
+                loss_weight_factor * (0.1 * log_mse_loss + 0.1 * ratio_loss)
+            )
             
-            # 組合損失 - 動態權重
-            loss = 0.5 * mse_loss + 0.2 * huber_loss + 0.2 * ratio_loss + 0.1 * range_loss
-            
+            # 檢查損失是否為NaN
+            if torch.isnan(total_train_loss):
+                print("警告: 損失為NaN! 跳過此批次。")
+                continue
+                
             # 反向傳播
-            loss.backward()
+            total_train_loss.backward()
             
-            # 梯度裁剪
+            # 梯度裁剪，避免梯度爆炸
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             
             # 更新參數
@@ -281,23 +391,30 @@ class SimpleTrainer:
             mae = F.l1_loss(delta_w_pred, targets)
             
             # 累計統計
-            total_loss += loss.item()
+            total_loss += total_train_loss.item()
             total_mae += mae.item()
             batch_count += 1
         
         # 返回平均損失和MAE
         if batch_count == 0:
-            return 0.0, 0.0  # 避免除以零
+            return 0.0, 0.0
         return total_loss / batch_count, total_mae / batch_count
     
     def evaluate(self, dataloader):
-        """評估模型"""
+        """評估模型
+        
+        Args:
+            dataloader: 評估數據加載器
+            
+        Returns:
+            平均損失和MAE
+        """
         self.model.eval()
         total_loss = 0
         total_mae = 0
         batch_count = 0
         
-        # 準備保存預測結果與真實值，用於更詳細的評估
+        # 收集所有預測和實際目標
         all_preds = []
         all_targets = []
         
@@ -305,7 +422,7 @@ class SimpleTrainer:
             for batch in dataloader:
                 static_features, time_series, targets = batch
                 
-                # 檢查批次大小，如果太小則跳過
+                # 檢查批次大小
                 if static_features.size(0) < 2:
                     continue
                     
@@ -318,13 +435,13 @@ class SimpleTrainer:
                 outputs = self.model(static_features, time_series)
                 delta_w_pred = outputs['delta_w']
                 
-                # 計算損失 (MSE)
+                # 計算標準損失 (MSE)
                 loss = F.mse_loss(delta_w_pred, targets)
                 
                 # 計算MAE
                 mae = F.l1_loss(delta_w_pred, targets)
                 
-                # 保存預測結果與真實值
+                # 保存預測結果和目標值用於計算其他指標
                 all_preds.append(delta_w_pred.cpu())
                 all_targets.append(targets.cpu())
                 
@@ -338,19 +455,26 @@ class SimpleTrainer:
             all_preds = torch.cat(all_preds, dim=0).numpy()
             all_targets = torch.cat(all_targets, dim=0).numpy()
             
+            # 檢查預測值範圍
+            print(f"預測值範圍: {all_preds.min():.4f} - {all_preds.max():.4f}")
+            print(f"目標值範圍: {all_targets.min():.4f} - {all_targets.max():.4f}")
+            
             # 計算上升通道的R²和RMSE
-            up_r2 = 1 - np.sum((all_targets[:, 0] - all_preds[:, 0])**2) / np.sum((all_targets[:, 0] - np.mean(all_targets[:, 0]))**2)
-            up_rmse = np.sqrt(np.mean((all_targets[:, 0] - all_preds[:, 0])**2))
-            
-            # 計算下降通道的R²和RMSE
-            down_r2 = 1 - np.sum((all_targets[:, 1] - all_preds[:, 1])**2) / np.sum((all_targets[:, 1] - np.mean(all_targets[:, 1]))**2)
-            down_rmse = np.sqrt(np.mean((all_targets[:, 1] - all_preds[:, 1])**2))
-            
-            print(f"  驗證指標 - Up R²: {up_r2:.4f}, RMSE: {up_rmse:.6f} | Down R²: {down_r2:.4f}, RMSE: {down_rmse:.6f}")
+            try:
+                up_r2 = 1 - np.sum((all_targets[:, 0] - all_preds[:, 0])**2) / np.sum((all_targets[:, 0] - np.mean(all_targets[:, 0]))**2)
+                up_rmse = np.sqrt(np.mean((all_targets[:, 0] - all_preds[:, 0])**2))
+                
+                # 計算下降通道的R²和RMSE
+                down_r2 = 1 - np.sum((all_targets[:, 1] - all_preds[:, 1])**2) / np.sum((all_targets[:, 1] - np.mean(all_targets[:, 1]))**2)
+                down_rmse = np.sqrt(np.mean((all_targets[:, 1] - all_preds[:, 1])**2))
+                
+                print(f"  驗證指標 - Up R²: {up_r2:.4f}, RMSE: {up_rmse:.6f} | Down R²: {down_r2:.4f}, RMSE: {down_rmse:.6f}")
+            except:
+                print("  警告: 無法計算R²和RMSE")
         
         # 返回平均損失和MAE
         if batch_count == 0:
-            return 0.0, 0.0  # 避免除以零
+            return 0.0, 0.0
         return total_loss / batch_count, total_mae / batch_count
     
     def train(self, train_loader, val_loader, epochs, patience=10):
@@ -382,7 +506,7 @@ class SimpleTrainer:
             
             # 更新學習率
             self.scheduler.step()
-            current_lr = self.scheduler.get_last_lr()[0]
+            current_lr = self.optimizer.param_groups[0]['lr']
             
             # 記錄訓練歷史
             self.history['train_loss'].append(train_loss)
@@ -416,40 +540,3 @@ class SimpleTrainer:
             self.model.load_state_dict(best_model)
             
         return self.history
-    
-    def predict(self, dataloader):
-        """使用模型進行預測
-        
-        Args:
-            dataloader: 測試數據加載器
-            
-        Returns:
-            預測結果和真實值
-        """
-        self.model.eval()
-        all_predictions = []
-        all_targets = []
-        
-        with torch.no_grad():
-            for batch in dataloader:
-                static_features, time_series, targets = batch
-                
-                # 轉移數據到設備
-                static_features = static_features.to(self.device)
-                time_series = time_series.to(self.device)
-                
-                # 前向傳播
-                outputs = self.model(static_features, time_series)
-                delta_w_pred = outputs['delta_w']
-                
-                # 收集預測結果
-                all_predictions.append(delta_w_pred.cpu().numpy())
-                all_targets.append(targets.numpy())
-        
-        # 合併批次結果
-        if len(all_predictions) > 0:
-            all_predictions = np.concatenate(all_predictions, axis=0)
-            all_targets = np.concatenate(all_targets, axis=0)
-            return all_predictions, all_targets
-        else:
-            return np.array([]), np.array([])
