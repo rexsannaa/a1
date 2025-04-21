@@ -170,13 +170,12 @@ class HybridPINNLSTM(nn.Module):
         # 合併特徵
         combined = torch.cat([static_out, context_vector], dim=1)
         
-        # 預測應變差
-        delta_w_pred = 0.04 + 0.02 * torch.tanh(delta_w_pred)
+        # 使用融合層生成原始輸出
+        raw_output = self.fusion_layer(combined)
         
-        # 使用更適合的方式確保輸出在合理範圍
-        # 移除softplus並修改clamp範圍，使用sigmoid確保輸出有更好的分布
-        # 縮放sigmoid輸出到合理的應變範圍
-        delta_w_pred = 0.03 + 0.05 * torch.sigmoid(delta_w_pred)
+        # 範圍控制：確保輸出落在合理範圍內
+        # 使用tanh函數限制輸出範圍
+        delta_w_pred = 0.04 + 0.02 * torch.tanh(raw_output)
         
         # 返回預測的應變差和中間結果
         return {
