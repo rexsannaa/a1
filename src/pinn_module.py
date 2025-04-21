@@ -39,7 +39,7 @@ class SimplePINNModule(nn.Module):
     def forward(self, static_features):
         """前向傳播"""
         x = F.relu(self.main_layer(static_features))
-        delta_w = F.softplus(self.output_layer(x)) * 0.1
+        delta_w = F.softplus(self.output_layer(x)) * 0.2
         return delta_w
     
     def compute_physical_loss(self, static_features, delta_w_pred):

@@ -127,7 +127,7 @@ class DataProcessor:
         return static_norm, time_series_norm, target_norm
     
     def augment_data(self, static_features, time_series_data, target, factor=3):
-        """數據增強：對小樣本數據進行擴充，使用更保守的方法
+        """數據增強：對小樣本數據進行擴充，使用更多樣化的方法
         
         Args:
             static_features: 靜態特徵
@@ -150,20 +150,25 @@ class DataProcessor:
         aug_time_series[:n_samples] = time_series_data
         aug_target[:n_samples] = target
         
-        # 實現更保守的數據增強方法
+        # 實現更多樣化的數據增強方法
         for i in range(1, factor):
             idx = n_samples * i
             
-            # 1. 微小隨機噪聲增強 - 噪聲標準差降低
+            # 1. 微小隨機噪聲增強 - 根據數據量級調整噪聲
             if i == 1:
-                noise_level = 0.01  # 降低從0.02到0.01
-                aug_static[idx:idx+n_samples] = static_features + np.random.normal(0, noise_level, static_features.shape)
-                aug_time_series[idx:idx+n_samples] = time_series_data + np.random.normal(0, noise_level, time_series_data.shape)
-                aug_target[idx:idx+n_samples] = target + np.random.normal(0, noise_level, target.shape)
+                # 針對不同特徵使用不同量級的噪聲
+                static_noise = np.random.normal(0, 0.02, static_features.shape)
+                ts_noise = np.random.normal(0, 0.02, time_series_data.shape)
+                target_noise = np.random.normal(0, 0.02, target.shape)
+                
+                # 確保增強後的目標仍為正值
+                aug_static[idx:idx+n_samples] = static_features + static_noise
+                aug_time_series[idx:idx+n_samples] = time_series_data + ts_noise
+                aug_target[idx:idx+n_samples] = np.maximum(0.001, target + target_noise)
             
-            # 2. 鄰近樣本插值 - 更接近原始樣本
+            # 2. 特徵組合增強
             else:
-                # 隨機選擇鄰近樣本對進行插值
+                # 隨機選擇樣本對進行插值
                 for j in range(n_samples):
                     # 找到最近的5個樣本
                     distances = np.sum((static_features - static_features[j]) ** 2, axis=1)
@@ -171,12 +176,18 @@ class DataProcessor:
                     closest_idx = np.argsort(distances)[:5]
                     # 隨機選擇一個最近的樣本
                     k = closest_idx[np.random.randint(0, len(closest_idx))]
-                    # 更接近原始樣本的插值比例
-                    ratio = np.random.uniform(0.8, 0.95)
+                    # 使用變化的插值比例
+                    ratio = np.random.uniform(0.2, 0.8)
                     # 線性插值
                     aug_static[idx+j] = static_features[j] * ratio + static_features[k] * (1-ratio)
                     aug_time_series[idx+j] = time_series_data[j] * ratio + time_series_data[k] * (1-ratio)
                     aug_target[idx+j] = target[j] * ratio + target[k] * (1-ratio)
+                    
+                    # 額外添加少量隨機擾動
+                    aug_static[idx+j] += np.random.normal(0, 0.01, static_features.shape[1])
+                    aug_time_series[idx+j] += np.random.normal(0, 0.01, time_series_data.shape[1:])
+                    # 確保目標值為正
+                    aug_target[idx+j] = np.maximum(0.001, aug_target[idx+j])
         
         return aug_static, aug_time_series, aug_target
     

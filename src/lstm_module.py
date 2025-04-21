@@ -180,7 +180,7 @@ class LSTMModule(nn.Module):
         delta_w = self.fc2(x)
         
         # 使用Softplus確保應變為正值，符合物理意義
-        delta_w = F.softplus(delta_w) * 0.1
+        delta_w = F.softplus(delta_w) * 0.2
         
         return delta_w, attention_weights
     

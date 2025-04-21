@@ -78,8 +78,6 @@ class HybridPINNLSTM(nn.Module):
         combined_features = torch.cat([pinn_out, lstm_out], dim=1)
         delta_w_pred = self.fusion_layer(combined_features)
         
-        # 使用Softplus確保應變為正值，符合物理意義
-        delta_w_pred = F.softplus(delta_w_pred) * 0.1
         
         # 返回預測的應變差和中間結果
         return {
