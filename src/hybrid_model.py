@@ -74,7 +74,6 @@ class SimpleLSTMEncoder(nn.Module):
         
         return output, dummy_attention
 
-# 修改 HybridPINNLSTM 類別
 class HybridPINNLSTM(nn.Module):
     """混合PINN-LSTM模型，結合靜態特徵和時間序列特徵預測應變差"""
     def __init__(self, config):
@@ -86,15 +85,15 @@ class HybridPINNLSTM(nn.Module):
         super(HybridPINNLSTM, self).__init__()
         self.config = config
         
-        # 改進：增強靜態特徵提取器（PINN分支）
+        # 改進：使用 LayerNorm 取代 BatchNorm
         static_dim = config.static_dim
         self.static_encoder = nn.Sequential(
             nn.Linear(static_dim, 32),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),  # 替換為 LayerNorm
             nn.LeakyReLU(0.1),
             nn.Dropout(0.2),
             nn.Linear(32, 24),
-            nn.BatchNorm1d(24),
+            nn.LayerNorm(24),  # 替換為 LayerNorm
             nn.LeakyReLU(0.1),
             nn.Dropout(0.2),
             nn.Linear(24, 16),
