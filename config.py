@@ -25,37 +25,37 @@ class Config:
         
         # 資料增強配置
         self.use_augmentation = True
-        self.augmentation_factor = 5  # 增強倍數
+        self.augmentation_factor = 3  # 增強倍數
         
         # 交叉驗證配置
         self.n_folds = 5
         
         # PINN模型配置
-        self.pinn_hidden_dims = [24, 16, 12]
+        self.pinn_hidden_dims = [16]
         self.use_dropout = True
         
         # LSTM模型配置
-        self.lstm_hidden_dim = 32
-        self.lstm_num_layers = 2
-        self.lstm_dropout = 0.2
-        self.lstm_fc_dim = 16
+        self.lstm_hidden_dim = 16
+        self.lstm_num_layers = 1
+        self.lstm_dropout = 0.0
+        self.lstm_fc_dim = 8
         
         # 融合層配置
-        self.fusion_hidden_dim = 8
+        self.fusion_hidden_dim = 0
         
         # 訓練配置
-        self.batch_size = 16
-        self.epochs = 200
-        self.learning_rate = 0.001
-        self.weight_decay = 0.0001
-        self.patience = 20  # 早停耐心值
+        self.batch_size = 8
+        self.epochs = 150
+        self.learning_rate = 0.0005
+        self.weight_decay = 0.001
+        self.patience = 15  # 早停耐心值
         
         # 損失函數配置
         self.data_loss_weight = 1.0
-        self.physical_loss_weight = 0.5
+        self.physical_loss_weight = 0.3
         self.reg_loss_weight = 0.01
-        self.lambda_l1 = 0.001  # L1正則化係數
-        self.lambda_l2 = 0.001  # L2正則化係數
+        self.lambda_l1 = 0.005  # L1正則化係數
+        self.lambda_l2 = 0.005  # L2正則化係數
         
         # 物理模型參數
         self.c_coefficient = -0.55  # Coffin-Manson係數C

@@ -135,9 +135,10 @@ class PINNLSTMTrainer:
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode='min',
-            factor=0.5,
-            patience=5,
-            min_lr=1e-6
+            factor=0.3,        # 從0.5降低到0.3，更激進的學習率下降
+            patience=3,        # 從5降低到3，更早觸發學習率調整
+            min_lr=1e-6,
+            verbose=True       # 添加訊息輸出
         )
         
         # 記錄訓練歷史
@@ -147,6 +148,7 @@ class PINNLSTMTrainer:
             'train_mae': [],
             'val_mae': []
         }
+        
         
     def train_epoch(self, dataloader):
         """訓練一個epoch
