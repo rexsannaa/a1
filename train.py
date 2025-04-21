@@ -96,14 +96,14 @@ def analyze_data():
     
     return df
 
-def train_fold(fold_idx, fold_data, device, epochs=50):
+def train_fold(fold_idx, fold_data, device, epochs=100):
     """訓練單個折的模型
     
     Args:
         fold_idx: 折索引
         fold_data: 折數據
         device: 計算設備
-        epochs: 訓練輪數
+        epochs: 訓練輪數，增加到100輪
         
     Returns:
         訓練好的模型和訓練歷史
@@ -129,7 +129,7 @@ def train_fold(fold_idx, fold_data, device, epochs=50):
     
     train_loader = DataLoader(
         train_dataset,
-        batch_size=8,  # 小批次大小，適合小樣本數據
+        batch_size=8,  # 保持小批次大小
         shuffle=True
     )
     
@@ -142,11 +142,11 @@ def train_fold(fold_idx, fold_data, device, epochs=50):
     # 初始化模型
     model = HybridPINNLSTM(config)
     
-    # 創建訓練器
-    trainer = SimpleTrainer(model, config, device)
+    # 創建訓練器，使用更強的學習策略
+    trainer = SimpleTrainer(model, config, device, lr=0.0005, weight_decay=0.0005)
     
     # 訓練模型
-    history = trainer.train(train_loader, val_loader, epochs=epochs)
+    history = trainer.train(train_loader, val_loader, epochs=epochs, patience=20)
     
     return model, history
 

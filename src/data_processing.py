@@ -161,7 +161,7 @@ class DataProcessor:
         return static_norm, time_series_norm, target_norm
     
     def augment_data(self, static_features, time_series_data, target, factor=2):
-        """輕量化數據增強方法，適合小樣本(81筆)
+        """增強版數據增強方法，適合小樣本(81筆)
         
         Args:
             static_features: 靜態特徵
@@ -188,21 +188,65 @@ class DataProcessor:
         target_mean = np.mean(target, axis=0)
         target_std = np.std(target, axis=0)
         
-        # 簡單增強策略，添加輕微噪聲
+        # 增強策略組合
         for i in range(1, factor):
             idx = n_samples * i
             
-            # 對靜態特徵添加溫和的噪聲
-            static_noise = np.random.normal(0, 0.01, static_features.shape)
-            aug_static[idx:idx+n_samples] = static_features + static_noise
-            
-            # 對時間序列添加溫和的噪聲
-            ts_noise = np.random.normal(0, 0.01, time_series_data.shape)
-            aug_time_series[idx:idx+n_samples] = time_series_data + ts_noise
-            
-            # 對目標值添加溫和的噪聲
-            target_noise = np.random.normal(0, 0.005, target.shape)
-            aug_target[idx:idx+n_samples] = target + target_noise
+            # 策略1: 高斯噪聲 (溫和噪聲)
+            if i % 3 == 0:
+                # 對靜態特徵添加不同程度的噪聲
+                noise_level = np.random.uniform(0.005, 0.02)
+                static_noise = np.random.normal(0, noise_level, static_features.shape)
+                aug_static[idx:idx+n_samples] = static_features + static_noise
+                
+                # 對時間序列添加相關噪聲，保持時間相關性
+                for j in range(time_series_data.shape[1]):
+                    ts_noise = np.random.normal(0, noise_level * (1 - j/time_series_data.shape[1]),
+                                            (n_samples, time_series_data.shape[2]))
+                    aug_time_series[idx:idx+n_samples, j, :] = time_series_data[:, j, :] + ts_noise
+                
+                # 對應的目標值噪聲
+                target_noise = np.random.normal(0, noise_level * 0.5, target.shape)
+                aug_target[idx:idx+n_samples] = target + target_noise
+                
+            # 策略2: 特徵尺度縮放 (模擬不同尺寸的結構)
+            elif i % 3 == 1:
+                # 生成縮放因子
+                scale_factor = np.random.uniform(0.95, 1.05, (n_samples, 1))
+                
+                # 縮放靜態特徵 (只縮放物理尺寸，保持warpage不變)
+                scaled_static = static_features.copy()
+                scaled_static[:, :4] = scaled_static[:, :4] * scale_factor
+                aug_static[idx:idx+n_samples] = scaled_static
+                
+                # 縮放時間序列 (保持物理一致性)
+                scale_factor_ts = np.repeat(scale_factor, time_series_data.shape[2], axis=1)
+                scaled_ts = time_series_data.copy()
+                for j in range(time_series_data.shape[1]):
+                    scaled_ts[:, j, :] = scaled_ts[:, j, :] * (1 - (1 - scale_factor) * (j/time_series_data.shape[1]))
+                aug_time_series[idx:idx+n_samples] = scaled_ts
+                
+                # 相應調整目標值 (保持物理比例)
+                scale_factor_target = np.power(scale_factor, 0.8)  # 非線性關係
+                aug_target[idx:idx+n_samples] = target * scale_factor_target
+                
+            # 策略3: 內插增強 (生成現有樣本之間的新樣本)
+            else:
+                # 隨機選擇樣本對進行內插
+                for j in range(n_samples):
+                    # 隨機選擇另一個樣本
+                    k = (j + np.random.randint(1, n_samples)) % n_samples
+                    # 內插比例
+                    alpha = np.random.uniform(0.2, 0.8)
+                    
+                    # 內插靜態特徵
+                    aug_static[idx+j] = static_features[j] * alpha + static_features[k] * (1-alpha)
+                    
+                    # 內插時間序列，保持時間相關性
+                    aug_time_series[idx+j] = time_series_data[j] * alpha + time_series_data[k] * (1-alpha)
+                    
+                    # 內插目標值
+                    aug_target[idx+j] = target[j] * alpha + target[k] * (1-alpha)
         
         # 輸出增強後的數據量
         print(f"數據增強: 從 {n_samples} 筆增加到 {len(aug_static)} 筆")
