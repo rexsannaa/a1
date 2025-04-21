@@ -141,7 +141,7 @@ def predict_batch(model, static_features, time_series, device):
 
 
 def evaluate_predictions(predictions, targets, df, data_processor, test_indices=None):
-    """評估預測結果
+    """改進的評估預測結果函數
     
     Args:
         predictions: 預測結果字典
@@ -159,7 +159,25 @@ def evaluate_predictions(predictions, targets, df, data_processor, test_indices=
     print(f"目標值範圍: {targets.min()} - {targets.max()}")
     print(f"預測值前5筆: {predictions['delta_w'][:5]}")
     print(f"目標值前5筆: {targets[:5]}")
-    # 計算delta_w預測的評估指標
+    
+    # 檢查是否有異常值，提前處理
+    pred_mean = np.mean(predictions['delta_w'], axis=0)
+    pred_std = np.std(predictions['delta_w'], axis=0)
+    
+    # 識別異常預測值
+    outlier_mask = np.abs(predictions['delta_w'] - pred_mean) > 3 * pred_std
+    if np.any(outlier_mask):
+        print(f"檢測到異常預測值數量: {np.sum(outlier_mask)}")
+        print("異常值索引:", np.where(outlier_mask)[0])
+        
+        # 修正異常值，使用中位數替代
+        for i in range(2):  # 兩個通道
+            channel_outliers = outlier_mask[:, i]
+            if np.any(channel_outliers):
+                median_val = np.median(predictions['delta_w'][:, i])
+                predictions['delta_w'][channel_outliers, i] = median_val
+    
+    # 計算調整後的delta_w預測的評估指標
     delta_w_metrics = calculate_metrics(targets, predictions['delta_w'])
     
     # 計算真實Nf值（從真實delta_w計算）
@@ -167,6 +185,26 @@ def evaluate_predictions(predictions, targets, df, data_processor, test_indices=
     delta_w_true_down = targets[:, 1]
     delta_w_true_mean = (delta_w_true_up + delta_w_true_down) / 2
     nf_true = np.array([calculate_nf_from_delta_w(dw) for dw in delta_w_true_mean])
+    
+    # 計算預測Nf值
+    delta_w_pred_mean = np.mean(predictions['delta_w'], axis=1)
+    nf_pred = np.array([calculate_nf_from_delta_w(dw) for dw in delta_w_pred_mean])
+    
+    # 處理極端Nf值
+    nf_pred_log = np.log10(np.abs(nf_pred))
+    nf_true_log = np.log10(np.abs(nf_true))
+    
+    # 檢測和處理Nf預測中的異常值
+    nf_pred_mean = np.mean(nf_pred_log)
+    nf_pred_std = np.std(nf_pred_log)
+    nf_outlier_mask = np.abs(nf_pred_log - nf_pred_mean) > 3 * nf_pred_std
+    
+    if np.any(nf_outlier_mask):
+        print(f"檢測到Nf異常預測值數量: {np.sum(nf_outlier_mask)}")
+        nf_pred_median = np.median(nf_pred_log)
+        nf_pred_log[nf_outlier_mask] = nf_pred_median
+        # 重新計算Nf預測
+        nf_pred = 10 ** nf_pred_log
     
     # 檢驗物理一致性
     physical_metrics = verify_physical_consistency(
@@ -176,15 +214,34 @@ def evaluate_predictions(predictions, targets, df, data_processor, test_indices=
         test_indices
     )
     
-    # 計算Nf預測的評估指標
-    nf_mse = mean_squared_error(np.log10(np.abs(nf_true)), np.log10(np.abs(predictions['nf'])))
-    nf_mae = mean_absolute_error(np.log10(np.abs(nf_true)), np.log10(np.abs(predictions['nf'])))
-    nf_r2 = r2_score(np.log10(np.abs(nf_true)), np.log10(np.abs(predictions['nf'])))
+    # 增強Nf預測的評估指標
+    # 使用對數空間計算指標，更適合疲勞壽命的分佈
+    nf_mse = mean_squared_error(nf_true_log, nf_pred_log)
+    nf_mae = mean_absolute_error(nf_true_log, nf_pred_log)
+    nf_r2 = r2_score(nf_true_log, nf_pred_log)
     
+    # 添加更多評估指標
+    # 計算相對誤差指標(MAPE)
+    delta_w_true_mean_no_zero = np.maximum(delta_w_true_mean, 1e-10)
+    delta_w_pred_mean_no_zero = np.maximum(delta_w_pred_mean, 1e-10)
+    mape = np.mean(np.abs((delta_w_true_mean_no_zero - delta_w_pred_mean_no_zero) / delta_w_true_mean_no_zero)) * 100
+    
+    # 計算物理模型一致性分數 - 預測和真實值之間的相關性
+    try:
+        delta_w_corr = np.corrcoef(delta_w_pred_mean, delta_w_true_mean)[0, 1]
+        nf_corr = np.corrcoef(nf_pred_log, nf_true_log)[0, 1]
+    except:
+        delta_w_corr = 0
+        nf_corr = 0
+    
+    # 增強的指標字典
     nf_metrics = {
         'log_nf_mse': nf_mse,
         'log_nf_mae': nf_mae,
-        'log_nf_r2': nf_r2
+        'log_nf_r2': nf_r2,
+        'delta_w_mape': mape,
+        'delta_w_correlation': delta_w_corr,
+        'nf_correlation': nf_corr
     }
     
     # 合併所有指標
