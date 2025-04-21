@@ -309,6 +309,47 @@ class SimpleTrainer:
         
         # 返回平均損失和MAE
         return total_loss / batch_count, total_mae / batch_count
+        # 在 SimpleTrainer 類中添加 evaluate 方法
+    def evaluate(self, dataloader):
+        """評估模型
+        
+        Args:
+            dataloader: 評估數據加載器
+            
+        Returns:
+            平均評估損失和MAE
+        """
+        self.model.eval()
+        total_loss = 0
+        total_mae = 0
+        batch_count = 0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                static_features, time_series, targets = batch
+                
+                # 轉移數據到設備
+                static_features = static_features.to(self.device)
+                time_series = time_series.to(self.device)
+                targets = targets.to(self.device)
+                
+                # 前向傳播
+                outputs = self.model(static_features, time_series)
+                delta_w_pred = outputs['delta_w']
+                
+                # 計算損失 (MSE)
+                loss = F.mse_loss(delta_w_pred, targets)
+                
+                # 計算MAE
+                mae = F.l1_loss(delta_w_pred, targets)
+                
+                # 累計統計
+                total_loss += loss.item()
+                total_mae += mae.item()
+                batch_count += 1
+        
+        # 返回平均損失和MAE
+        return total_loss / batch_count, total_mae / batch_count
     
     def train(self, train_loader, val_loader, epochs, patience=10):
         """訓練模型
