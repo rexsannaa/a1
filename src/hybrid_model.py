@@ -193,7 +193,6 @@ class HybridPINNLSTM(nn.Module):
             nn.Linear(32, 16),
             nn.GELU(),
             nn.Linear(16, 2),
-            nn.Softplus()
         )
         
         # 加入分支權重學習機制
@@ -261,9 +260,9 @@ class HybridPINNLSTM(nn.Module):
         delta_w_raw = self.output_layer(fused_features)
         
         # 更精細的輸出校準 - 適應實際應變範圍
-        delta_w_up = 0.01 + torch.sigmoid(delta_w_raw[:, 0:1]) * 0.08
-        delta_w_down = 0.01 + torch.sigmoid(delta_w_raw[:, 1:2]) * 0.07
-        
+        delta_w_up = torch.tanh(delta_w_raw[:, 0:1]) * 0.3 + 0.3  # 範圍: 0~0.6
+        delta_w_down = torch.tanh(delta_w_raw[:, 1:2]) * 0.02 + 0.06  # 範圍: 0.04~0.08
+
         delta_w_pred = torch.cat([delta_w_up, delta_w_down], dim=1)
         
         # 生成虛擬注意力權重供可視化使用
@@ -319,8 +318,8 @@ class SimpleTrainer:
         # 使用AdamW優化器，參數優化
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay,
+            lr=lr*0.5,
+            weight_decay=weight_decay*0.5,
             eps=1e-8,
             betas=(0.9, 0.999)
         )
@@ -384,18 +383,22 @@ class SimpleTrainer:
             
             return mixed_x_static, mixed_x_time, mixed_y
         
-        # 定義加權損失函數
+        # 定義加權損失函數 - 更平衡的權重策略
         def weighted_loss(pred, target):
-            """根據目標值大小調整權重，使模型更注重預測較大值"""
-            # 計算權重 - 較大的目標值獲得更高權重
-            weights = 1.0 + torch.log1p(target * 10)
-            weights = weights / weights.mean()
+            """平衡不同尺度的目標值，確保小值也能得到足夠關注"""
+            # 分別處理兩個通道的權重
+            up_weights = 1.0 / (1.0 + torch.abs(target[:, 0] - target[:, 0].mean()))
+            down_weights = 1.0 / (1.0 + torch.abs(target[:, 1] - target[:, 1].mean()))
             
-            # MSE損失
-            squared_diff = (pred - target)**2
-            weighted_squared_diff = weights * squared_diff
+            # 標準化權重
+            up_weights = up_weights / up_weights.mean()
+            down_weights = down_weights / down_weights.mean()
             
-            return weighted_squared_diff.mean()
+            # 計算加權MSE
+            up_loss = torch.mean(up_weights * (pred[:, 0] - target[:, 0])**2)
+            down_loss = torch.mean(down_weights * (pred[:, 1] - target[:, 1])**2)
+            
+            return up_loss + down_loss
         
         for batch in dataloader:
             static_features, time_series, targets = batch
@@ -451,11 +454,12 @@ class SimpleTrainer:
             std_loss = F.mse_loss(pred_std, target_std)
             
             # 總損失，權重動態調整
+            # 總損失，簡化並專注於主要損失
             epoch_factor = min(1.0, self.step_counter / 500)
             total_train_loss = (
                 mse_loss + 
-                0.3 * huber_loss + 
-                epoch_factor * (0.2 * log_mse_loss + 0.2 * ratio_loss + 0.1 * std_loss)
+                0.2 * huber_loss + 
+                epoch_factor * (0.1 * ratio_loss)  # 降低輔助損失的權重
             )
             
             # 檢查損失是否為NaN
