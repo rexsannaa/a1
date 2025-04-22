@@ -259,9 +259,20 @@ class HybridPINNLSTM(nn.Module):
         # 預測delta_w
         delta_w_raw = self.output_layer(fused_features)
         
-        # 更精細的輸出校準 - 適應實際應變範圍
-        delta_w_up = torch.tanh(delta_w_raw[:, 0:1]) * 0.3 + 0.3  # 範圍: 0~0.6
-        delta_w_down = torch.tanh(delta_w_raw[:, 1:2]) * 0.02 + 0.06  # 範圍: 0.04~0.08
+        # 使用對數空間預測，更適合處理範圍廣泛的數據
+        # 注意極端值的存在：Delta W Up 有一個異常值 0.5591
+        delta_w_up_log = delta_w_raw[:, 0:1]
+        delta_w_down_log = delta_w_raw[:, 1:1]
+
+        # 將對數空間映射回原始空間
+        # 上升應變：大部分範圍在 0.004-0.08，但有極端值到 0.56
+        delta_w_up = torch.exp(delta_w_up_log * 1.5 - 5.0)  # 調整以覆蓋實際數據範圍
+        # 下降應變：範圍約 0.04-0.08
+        delta_w_down = torch.exp(delta_w_down_log * 0.3 - 3.0)
+
+        # 確保輸出在合理範圍內
+        delta_w_up = torch.clamp(delta_w_up, min=0.001, max=0.6)
+        delta_w_down = torch.clamp(delta_w_down, min=0.03, max=0.09)
 
         delta_w_pred = torch.cat([delta_w_up, delta_w_down], dim=1)
         
@@ -432,16 +443,19 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-            # 主損失：加權MSE
-            mse_loss = weighted_loss(delta_w_pred, targets)
-            
-            # 輔助損失：Huber損失
-            huber_loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.05)
-            
-            # 輔助損失：對數空間MSE
+            # 在對數空間計算損失，更適合處理偏斜分佈
             log_targets = torch.log(targets + 1e-6)
             log_preds = torch.log(delta_w_pred + 1e-6)
+
+            # 主損失：對數空間MSE
             log_mse_loss = F.mse_loss(log_preds, log_targets)
+
+            # 輔助損失：原始空間的Huber損失，專注於較大誤差
+            huber_loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.01)  # 降低beta值
+
+            # 輔助損失：相對誤差損失
+            relative_error = torch.abs(delta_w_pred - targets) / (targets + 1e-6)
+            relative_loss = torch.mean(relative_error)
             
             # 輔助損失：相對比例損失
             target_ratio_up_down = targets[:, 0] / (targets[:, 1] + 1e-6)
@@ -455,11 +469,10 @@ class SimpleTrainer:
             
             # 總損失，權重動態調整
             # 總損失，簡化並專注於主要損失
-            epoch_factor = min(1.0, self.step_counter / 500)
             total_train_loss = (
-                mse_loss + 
-                0.2 * huber_loss + 
-                epoch_factor * (0.1 * ratio_loss)  # 降低輔助損失的權重
+                log_mse_loss +  # 主要損失
+                0.3 * huber_loss +  # 輔助損失
+                0.2 * relative_loss  # 確保相對誤差合理
             )
             
             # 檢查損失是否為NaN
@@ -541,18 +554,22 @@ class SimpleTrainer:
             print(f"預測值範圍: {all_preds.min():.4f} - {all_preds.max():.4f}")
             print(f"目標值範圍: {all_targets.min():.4f} - {all_targets.max():.4f}")
             
-            # 計算上升通道的R²和RMSE
+            # 計算上升通道的R²和RMSE，考慮極端值的影響
             try:
+                # 使用穩健的R²計算方法
                 up_r2 = 1 - np.sum((all_targets[:, 0] - all_preds[:, 0])**2) / np.sum((all_targets[:, 0] - np.mean(all_targets[:, 0]))**2)
-                up_rmse = np.sqrt(np.mean((all_targets[:, 0] - all_preds[:, 0])**2))
                 
-                # 計算下降通道的R²和RMSE
+                # 計算相對誤差和對數空間誤差
+                up_relative_error = np.mean(np.abs(all_targets[:, 0] - all_preds[:, 0]) / (all_targets[:, 0] + 1e-6))
+                up_log_rmse = np.sqrt(np.mean((np.log(all_targets[:, 0] + 1e-6) - np.log(all_preds[:, 0] + 1e-6))**2))
+                
+                # 下降通道同樣計算
                 down_r2 = 1 - np.sum((all_targets[:, 1] - all_preds[:, 1])**2) / np.sum((all_targets[:, 1] - np.mean(all_targets[:, 1]))**2)
-                down_rmse = np.sqrt(np.mean((all_targets[:, 1] - all_preds[:, 1])**2))
+                down_relative_error = np.mean(np.abs(all_targets[:, 1] - all_preds[:, 1]) / (all_targets[:, 1] + 1e-6))
+                down_log_rmse = np.sqrt(np.mean((np.log(all_targets[:, 1] + 1e-6) - np.log(all_preds[:, 1] + 1e-6))**2))
                 
-                print(f"  驗證指標 - Up R²: {up_r2:.4f}, RMSE: {up_rmse:.6f} | Down R²: {down_r2:.4f}, RMSE: {down_rmse:.6f}")
-            except:
-                print("  警告: 無法計算R²和RMSE")
+                print(f"  驗證指標 - Up R²: {up_r2:.4f}, 相對誤差: {up_relative_error:.4f}, 對數RMSE: {up_log_rmse:.4f}")
+                print(f"  驗證指標 - Down R²: {down_r2:.4f}, 相對誤差: {down_relative_error:.4f}, 對數RMSE: {down_log_rmse:.4f}")
         
         # 返回平均損失和MAE
         if batch_count == 0:
