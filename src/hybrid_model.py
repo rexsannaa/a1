@@ -262,18 +262,18 @@ class HybridPINNLSTM(nn.Module):
         # 使用對數空間預測，更適合處理範圍廣泛的數據
         # 注意極端值的存在：Delta W Up 有一個異常值 0.5591
         delta_w_up_log = delta_w_raw[:, 0:1]
-        delta_w_down_log = delta_w_raw[:, 1:1]
-
+        delta_w_down_log = delta_w_raw[:, 1:2]  # 修正的切片
+        
         # 將對數空間映射回原始空間
         # 上升應變：大部分範圍在 0.004-0.08，但有極端值到 0.56
         delta_w_up = torch.exp(delta_w_up_log * 1.5 - 5.0)  # 調整以覆蓋實際數據範圍
         # 下降應變：範圍約 0.04-0.08
         delta_w_down = torch.exp(delta_w_down_log * 0.3 - 3.0)
-
+        
         # 確保輸出在合理範圍內
         delta_w_up = torch.clamp(delta_w_up, min=0.001, max=0.6)
         delta_w_down = torch.clamp(delta_w_down, min=0.03, max=0.09)
-
+        
         delta_w_pred = torch.cat([delta_w_up, delta_w_down], dim=1)
         
         # 生成虛擬注意力權重供可視化使用
@@ -625,3 +625,45 @@ class SimpleTrainer:
             self.model.load_state_dict(best_model)
             
         return self.history
+
+class SkewedOutputLayer(nn.Module):
+    """專門處理偏斜分佈的輸出層"""
+    def __init__(self, in_features):
+        super(SkewedOutputLayer, self).__init__()
+        
+        # 主要預測頭
+        self.normal_head = nn.Sequential(
+            nn.Linear(in_features, 16),
+            nn.LayerNorm(16),
+            nn.GELU(),
+            nn.Linear(16, 2)
+        )
+        
+        # 極端值預測頭
+        self.extreme_head = nn.Sequential(
+            nn.Linear(in_features, 8),
+            nn.LayerNorm(8),
+            nn.GELU(),
+            nn.Linear(8, 2),
+            nn.Sigmoid()
+        )
+        
+        # 混合門控
+        self.gate = nn.Sequential(
+            nn.Linear(in_features, 4),
+            nn.GELU(),
+            nn.Linear(4, 2),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x):
+        # 正常範圍預測
+        normal_out = self.normal_head(x)
+        
+        # 極端值預測
+        extreme_out = self.extreme_head(x)
+        
+        # 門控權重
+        gate_weight = self.gate(x)
+        
+        return normal_out, extreme_out, gate_weight
