@@ -554,22 +554,18 @@ class SimpleTrainer:
             print(f"預測值範圍: {all_preds.min():.4f} - {all_preds.max():.4f}")
             print(f"目標值範圍: {all_targets.min():.4f} - {all_targets.max():.4f}")
             
-            # 計算上升通道的R²和RMSE，考慮極端值的影響
+            # 計算上升通道的R²和RMSE
             try:
-                # 使用穩健的R²計算方法
                 up_r2 = 1 - np.sum((all_targets[:, 0] - all_preds[:, 0])**2) / np.sum((all_targets[:, 0] - np.mean(all_targets[:, 0]))**2)
+                up_rmse = np.sqrt(np.mean((all_targets[:, 0] - all_preds[:, 0])**2))
                 
-                # 計算相對誤差和對數空間誤差
-                up_relative_error = np.mean(np.abs(all_targets[:, 0] - all_preds[:, 0]) / (all_targets[:, 0] + 1e-6))
-                up_log_rmse = np.sqrt(np.mean((np.log(all_targets[:, 0] + 1e-6) - np.log(all_preds[:, 0] + 1e-6))**2))
-                
-                # 下降通道同樣計算
+                # 計算下降通道的R²和RMSE
                 down_r2 = 1 - np.sum((all_targets[:, 1] - all_preds[:, 1])**2) / np.sum((all_targets[:, 1] - np.mean(all_targets[:, 1]))**2)
-                down_relative_error = np.mean(np.abs(all_targets[:, 1] - all_preds[:, 1]) / (all_targets[:, 1] + 1e-6))
-                down_log_rmse = np.sqrt(np.mean((np.log(all_targets[:, 1] + 1e-6) - np.log(all_preds[:, 1] + 1e-6))**2))
+                down_rmse = np.sqrt(np.mean((all_targets[:, 1] - all_preds[:, 1])**2))
                 
-                print(f"  驗證指標 - Up R²: {up_r2:.4f}, 相對誤差: {up_relative_error:.4f}, 對數RMSE: {up_log_rmse:.4f}")
-                print(f"  驗證指標 - Down R²: {down_r2:.4f}, 相對誤差: {down_relative_error:.4f}, 對數RMSE: {down_log_rmse:.4f}")
+                print(f"  驗證指標 - Up R²: {up_r2:.4f}, RMSE: {up_rmse:.6f} | Down R²: {down_r2:.4f}, RMSE: {down_rmse:.6f}")
+            except:
+                print("  警告: 無法計算R²和RMSE")
         
         # 返回平均損失和MAE
         if batch_count == 0:
