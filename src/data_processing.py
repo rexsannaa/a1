@@ -122,9 +122,12 @@ class DataProcessor:
         
         # 提取目標變數 (ΔW): 累積等效應變
         target = df[self.target_features].values
-        
-        # 使用更穩健的異常值檢測方法
+    
+    # [修改這部分，大約在134-150行]
+    # 使用更穩健的異常值檢測方法
         print("\n檢測並處理異常值:")
+        
+        # 檢測上升應變異常值
         up_median = np.median(target[:, 0])
         up_mad = np.median(np.abs(target[:, 0] - up_median))
         outliers_up = np.abs(target[:, 0] - up_median) > 3 * up_mad
@@ -139,15 +142,24 @@ class DataProcessor:
             target[outliers_up, 0] = np.clip(target[outliers_up, 0], 
                                             lower_bound, 
                                             upper_bound)
-        print(f"上升應變異常值數量: {np.sum(outliers_up)}")
-        if np.sum(outliers_up) > 0:
-            print(f"異常值: {target[outliers_up, 0]}")
-            
-        # 對異常值進行溫和處理，而不是完全移除
-        target[outliers_up, 0] = np.clip(target[outliers_up, 0], 
-                                        up_mean - 3 * up_std, 
-                                        up_mean + 3 * up_std)
+            print(f"處理後的值: {target[outliers_up, 0]}")
         
+        # 檢測下降應變異常值
+        down_median = np.median(target[:, 1])
+        down_mad = np.median(np.abs(target[:, 1] - down_median))
+        outliers_down = np.abs(target[:, 1] - down_median) > 3 * down_mad
+        
+        if np.sum(outliers_down) > 0:
+            print(f"下降應變異常值數量: {np.sum(outliers_down)}")
+            print(f"異常值: {target[outliers_down, 1]}")
+            # 使用基於中位數的溫和限制
+            upper_bound = down_median + 3 * down_mad
+            lower_bound = down_median - 3 * down_mad
+            target[outliers_down, 1] = np.clip(target[outliers_down, 1], 
+                                            lower_bound, 
+                                            upper_bound)
+            print(f"處理後的值: {target[outliers_down, 1]}")
+
         return static_features, time_series_data, target
     
     def normalize_data(self, static_features, time_series_data, target, fit=True):
