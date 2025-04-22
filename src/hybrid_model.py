@@ -461,7 +461,7 @@ class SimpleTrainer:
             # 前向傳播
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
-            
+
             # 新的損失計算方法 - 適應實際數據分布
             # 對上升和下降通道分別計算損失
             up_loss = F.mse_loss(delta_w_pred[:, 0], targets[:, 0])
@@ -487,31 +487,6 @@ class SimpleTrainer:
                 0.1 * torch.mean(constraint_loss)  # 物理約束
             )
 
-            # 輔助損失：原始空間的Huber損失，專注於較大誤差
-            huber_loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.01)  # 降低beta值
-
-            # 輔助損失：相對誤差損失
-            relative_error = torch.abs(delta_w_pred - targets) / (targets + 1e-6)
-            relative_loss = torch.mean(relative_error)
-            
-            # 輔助損失：相對比例損失
-            target_ratio_up_down = targets[:, 0] / (targets[:, 1] + 1e-6)
-            pred_ratio_up_down = delta_w_pred[:, 0] / (delta_w_pred[:, 1] + 1e-6)
-            ratio_loss = F.l1_loss(pred_ratio_up_down, target_ratio_up_down)
-            
-            # 輔助損失：標準差一致性損失
-            target_std = torch.std(targets, dim=0)
-            pred_std = torch.std(delta_w_pred, dim=0)
-            std_loss = F.mse_loss(pred_std, target_std)
-            
-            # 總損失，權重動態調整
-            # 總損失，簡化並專注於主要損失
-            total_train_loss = (
-                log_mse_loss +  # 主要損失
-                0.3 * huber_loss +  # 輔助損失
-                0.2 * relative_loss  # 確保相對誤差合理
-            )
-            
             # 檢查損失是否為NaN
             if torch.isnan(total_train_loss):
                 print("警告: 損失為NaN! 跳過此批次。")
@@ -519,16 +494,16 @@ class SimpleTrainer:
                 
             # 反向傳播
             total_train_loss.backward()
-            
+
             # 梯度裁剪
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
-            
+
             # 更新參數
             self.optimizer.step()
-            
+
             # 計算MAE
             mae = F.l1_loss(delta_w_pred, targets)
-            
+
             # 累計統計
             total_loss += total_train_loss.item()
             total_mae += mae.item()
