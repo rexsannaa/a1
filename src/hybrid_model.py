@@ -489,8 +489,8 @@ class SimpleTrainer:
 
             # 總損失，根據數據特性調整權重
             total_train_loss = (
-                0.4 * up_huber_loss +  # 上升通道使用Huber損失處理異常值
-                0.4 * down_loss +      # 下降通道使用標準MSE
+                0.4 * up_log_mse +     # 上升通道使用對數損失
+                0.4 * down_log_mse +   # 下降通道使用對數損失
                 0.1 * relative_loss +  # 相對誤差
                 0.1 * torch.mean(constraint_loss)  # 物理約束
             )

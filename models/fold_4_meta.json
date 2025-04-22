@@ -24,19 +24,19 @@
     "augmentation_factor": 4,
     "n_folds": 5,
     "use_dropout": true,
-    "lstm_dropout": 0.2,
-    "lstm_hidden_dim": 64,
-    "lstm_num_layers": 1,
-    "batch_size": 8,
-    "epochs": 200,
-    "learning_rate": 0.001,
+    "lstm_dropout": 0.3,
+    "lstm_hidden_dim": 96,
+    "lstm_num_layers": 2,
+    "batch_size": 4,
+    "epochs": 300,
+    "learning_rate": 0.0005,
     "weight_decay": 0.0001,
-    "patience": 25,
+    "patience": 40,
     "c_coefficient": -0.55,
     "m_exponent": 1.36,
     "model_save_path": "models/hybrid_model.pt",
     "results_dir": "results"
   },
   "metrics": {},
-  "timestamp": "2025-04-22 18:38:54"
+  "timestamp": "2025-04-22 18:53:44"
 }
