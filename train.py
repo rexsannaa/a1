@@ -96,7 +96,7 @@ def analyze_data():
     
     return df
 
-def train_fold(fold_idx, fold_data, device, epochs=100):
+def train_fold(fold_idx, fold_data, device, epochs=300):
     """訓練單個折的模型
     
     Args:

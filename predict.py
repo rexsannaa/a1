@@ -201,7 +201,26 @@ def evaluate_predictions(predictions, targets, df, data_processor, test_indices=
     all_metrics = {**delta_w_metrics, **nf_metrics, **physical_metrics}
     
     return all_metrics, nf_true
-
+# 在第 192 行之後添加集成預測
+def ensemble_predict(models, static_features, time_series, device):
+    """集成多個模型的預測結果"""
+    all_delta_w = []
+    
+    for model in models:
+        with torch.no_grad():
+            outputs = model(static_features, time_series)
+            all_delta_w.append(outputs['delta_w'])
+    
+    # 取平均值作為最終預測
+    ensemble_delta_w = torch.stack(all_delta_w).mean(dim=0)
+    
+    # 計算Nf
+    nf_pred = model.calculate_nf(ensemble_delta_w)
+    
+    return {
+        'delta_w': ensemble_delta_w,
+        'nf': nf_pred
+    }
 
 def visualize_results(predictions, targets, nf_true, df, config, case_ids=None):
     """可視化預測結果

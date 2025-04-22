@@ -276,16 +276,15 @@ class HybridPINNLSTM(nn.Module):
         
         fused_features = self.fusion_layer(combined_features)
         
-        # 新的預測方法 - 分支預測並考慮數據分布
+        # 考慮到數據分佈的偏態特性，採用更精確的輸出轉換
+        # 上升應變有較大的值域範圍和異常值
         up_logits = self.output_layer['up_branch'](fused_features)
+        # 使用更適合的激活函數處理偏態分佈
+        delta_w_up = torch.exp(up_logits) * 0.05  # 允許更大的動態範圍
+
+        # 下降應變分佈較為集中，但也有小的異常值
         down_logits = self.output_layer['down_branch'](fused_features)
-
-        # 考慮到目標值分布特性，使用不同的激活函數
-        # 上升應變：範圍 0.004-0.56，大部分集中在 0.04-0.08，但有異常值
-        delta_w_up = torch.sigmoid(up_logits) * 0.6 + 0.001  # 輸出範圍 0.001-0.601
-
-        # 下降應變：範圍約 0.04-0.08，分布較均勻
-        delta_w_down = torch.sigmoid(down_logits) * 0.05 + 0.035  # 輸出範圍 0.035-0.085
+        delta_w_down = torch.sigmoid(down_logits) * 0.04 + 0.04  # 輸出範圍 0.04-0.08
 
         delta_w_pred = torch.cat([delta_w_up, delta_w_down], dim=1)
                 
@@ -462,14 +461,23 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
 
-            # 新的損失計算方法 - 適應實際數據分布
-            # 對上升和下降通道分別計算損失
-            up_loss = F.mse_loss(delta_w_pred[:, 0], targets[:, 0])
-            down_loss = F.mse_loss(delta_w_pred[:, 1], targets[:, 1])
+            # 針對偏態分佈使用對數空間損失
+            up_log_mse = F.mse_loss(torch.log(delta_w_pred[:, 0] + 1e-6), 
+                                    torch.log(targets[:, 0] + 1e-6))
+            down_log_mse = F.mse_loss(torch.log(delta_w_pred[:, 1] + 1e-6), 
+                                    torch.log(targets[:, 1] + 1e-6))
 
-            # 考慮到上升通道有異常值，使用Huber損失減輕影響
-            up_huber_loss = F.huber_loss(delta_w_pred[:, 0], targets[:, 0], delta=0.1)
-            down_huber_loss = F.huber_loss(delta_w_pred[:, 1], targets[:, 1], delta=0.01)
+            # 同時考慮原始空間的損失
+            up_mse = F.mse_loss(delta_w_pred[:, 0], targets[:, 0])
+            down_mse = F.mse_loss(delta_w_pred[:, 1], targets[:, 1])
+
+            # 混合損失策略
+            total_train_loss = (
+                0.3 * up_log_mse +      # 對數空間損失處理偏態分佈
+                0.2 * up_mse +          # 原始空間損失
+                0.3 * down_log_mse +    
+                0.2 * down_mse
+            )
 
             # 計算相對誤差損失
             up_relative_error = torch.abs((delta_w_pred[:, 0] - targets[:, 0]) / (targets[:, 0] + 1e-6))

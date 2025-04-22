@@ -123,12 +123,22 @@ class DataProcessor:
         # 提取目標變數 (ΔW): 累積等效應變
         target = df[self.target_features].values
         
-        # 在提取目標變數之後添加異常值處理
-        # 檢測並處理異常值
-        print("\n檢測到的異常值:")
-        up_mean = target[:, 0].mean()
-        up_std = target[:, 0].std()
-        outliers_up = np.abs(target[:, 0] - up_mean) > 3 * up_std
+        # 使用更穩健的異常值檢測方法
+        print("\n檢測並處理異常值:")
+        up_median = np.median(target[:, 0])
+        up_mad = np.median(np.abs(target[:, 0] - up_median))
+        outliers_up = np.abs(target[:, 0] - up_median) > 3 * up_mad
+
+        # 對異常值進行溫和處理
+        if np.sum(outliers_up) > 0:
+            print(f"上升應變異常值數量: {np.sum(outliers_up)}")
+            print(f"異常值: {target[outliers_up, 0]}")
+            # 使用基於中位數的溫和限制
+            upper_bound = up_median + 3 * up_mad
+            lower_bound = up_median - 3 * up_mad
+            target[outliers_up, 0] = np.clip(target[outliers_up, 0], 
+                                            lower_bound, 
+                                            upper_bound)
         print(f"上升應變異常值數量: {np.sum(outliers_up)}")
         if np.sum(outliers_up) > 0:
             print(f"異常值: {target[outliers_up, 0]}")

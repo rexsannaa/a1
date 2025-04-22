@@ -31,16 +31,16 @@ class Config:
         
         # 模型配置
         self.use_dropout = True
-        self.lstm_dropout = 0.2
-        self.lstm_hidden_dim = 64  # 增加隱藏層維度
-        self.lstm_num_layers = 1  # 保持2層LSTM
+        self.lstm_dropout = 0.3
+        self.lstm_hidden_dim = 96  # 增加隱藏層維度
+        self.lstm_num_layers = 2  # 保持2層LSTM
         
         # 訓練配置
-        self.batch_size = 8
-        self.epochs = 200  # 增加訓練輪數
-        self.learning_rate = 0.001  # 調整初始學習率
+        self.batch_size = 4
+        self.epochs = 300  # 增加訓練輪數
+        self.learning_rate = 0.0005  # 調整初始學習率
         self.weight_decay = 0.0001  # 增加權重衰減
-        self.patience = 25  # 增加耐心值
+        self.patience = 40  # 增加耐心值
         
         # 物理模型參數
         self.c_coefficient = -0.55  # Coffin-Manson係數C
