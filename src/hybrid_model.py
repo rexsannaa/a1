@@ -185,15 +185,35 @@ class HybridPINNLSTM(nn.Module):
             nn.Dropout(0.1)
         )
         
-        # 輸出層 - 使用更精細的輸出策略
-        self.output_layer = nn.Sequential(
-            nn.Linear(self.embed_dim, 32),
-            nn.LayerNorm(32),
-            nn.GELU(),
-            nn.Linear(32, 16),
-            nn.GELU(),
-            nn.Linear(16, 2),
-        )
+        # 新的輸出層設計 - 針對數據分布特性優化
+        self.output_layer = nn.ModuleDict({
+            'up_branch': nn.Sequential(
+                nn.Linear(self.embed_dim, 32),
+                nn.LayerNorm(32),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(32, 16),
+                nn.GELU(),
+                nn.Linear(16, 8),
+                nn.GELU(),
+                nn.Linear(8, 1)
+            ),
+            'down_branch': nn.Sequential(
+                nn.Linear(self.embed_dim, 32),
+                nn.LayerNorm(32),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(32, 16),
+                nn.GELU(),
+                nn.Linear(16, 8),
+                nn.GELU(),
+                nn.Linear(8, 1)
+            )
+        })
+
+        # 添加標準化參數用於輸出縮放
+        self.register_buffer('target_mean', torch.tensor([0.0, 0.0]))
+        self.register_buffer('target_std', torch.tensor([1.0, 1.0]))
         
         # 加入分支權重學習機制
         self.branch_weight = nn.Parameter(torch.ones(2))
@@ -256,20 +276,19 @@ class HybridPINNLSTM(nn.Module):
         
         fused_features = self.fusion_layer(combined_features)
         
-        # 預測delta_w
-        delta_w_raw = self.output_layer(fused_features)
-        
-        # 使用對數空間預測，更適合處理範圍廣泛的數據
-        # 注意極端值的存在：Delta W Up 有一個異常值 0.5591
-        delta_w_up_log = delta_w_raw[:, 0:1]
-        delta_w_down_log = delta_w_raw[:, 1:2]  # 修正的切片
-        
-        # 將對數空間映射回原始空間
-        # 上升應變：大部分範圍在 0.004-0.08，但有極端值到 0.56
-        delta_w_up = torch.exp(delta_w_up_log * 1.5 - 5.0)  # 調整以覆蓋實際數據範圍
-        # 下降應變：範圍約 0.04-0.08
-        delta_w_down = torch.exp(delta_w_down_log * 0.3 - 3.0)
-        
+        # 新的預測方法 - 分支預測並考慮數據分布
+        up_logits = self.output_layer['up_branch'](fused_features)
+        down_logits = self.output_layer['down_branch'](fused_features)
+
+        # 考慮到目標值分布特性，使用不同的激活函數
+        # 上升應變：範圍 0.004-0.56，大部分集中在 0.04-0.08，但有異常值
+        delta_w_up = torch.sigmoid(up_logits) * 0.6 + 0.001  # 輸出範圍 0.001-0.601
+
+        # 下降應變：範圍約 0.04-0.08，分布較均勻
+        delta_w_down = torch.sigmoid(down_logits) * 0.05 + 0.035  # 輸出範圍 0.035-0.085
+
+        delta_w_pred = torch.cat([delta_w_up, delta_w_down], dim=1)
+                
         # 確保輸出在合理範圍內
         delta_w_up = torch.clamp(delta_w_up, min=0.001, max=0.6)
         delta_w_down = torch.clamp(delta_w_down, min=0.03, max=0.09)
@@ -443,12 +462,30 @@ class SimpleTrainer:
             outputs = self.model(static_features, time_series)
             delta_w_pred = outputs['delta_w']
             
-            # 在對數空間計算損失，更適合處理偏斜分佈
-            log_targets = torch.log(targets + 1e-6)
-            log_preds = torch.log(delta_w_pred + 1e-6)
+            # 新的損失計算方法 - 適應實際數據分布
+            # 對上升和下降通道分別計算損失
+            up_loss = F.mse_loss(delta_w_pred[:, 0], targets[:, 0])
+            down_loss = F.mse_loss(delta_w_pred[:, 1], targets[:, 1])
 
-            # 主損失：對數空間MSE
-            log_mse_loss = F.mse_loss(log_preds, log_targets)
+            # 考慮到上升通道有異常值，使用Huber損失減輕影響
+            up_huber_loss = F.huber_loss(delta_w_pred[:, 0], targets[:, 0], delta=0.1)
+            down_huber_loss = F.huber_loss(delta_w_pred[:, 1], targets[:, 1], delta=0.01)
+
+            # 計算相對誤差損失
+            up_relative_error = torch.abs((delta_w_pred[:, 0] - targets[:, 0]) / (targets[:, 0] + 1e-6))
+            down_relative_error = torch.abs((delta_w_pred[:, 1] - targets[:, 1]) / (targets[:, 1] + 1e-6))
+            relative_loss = torch.mean(up_relative_error) + torch.mean(down_relative_error)
+
+            # 添加物理約束：上升應變通常大於下降應變
+            constraint_loss = F.relu(delta_w_pred[:, 1] - delta_w_pred[:, 0])
+
+            # 總損失，根據數據特性調整權重
+            total_train_loss = (
+                0.4 * up_huber_loss +  # 上升通道使用Huber損失處理異常值
+                0.4 * down_loss +      # 下降通道使用標準MSE
+                0.1 * relative_loss +  # 相對誤差
+                0.1 * torch.mean(constraint_loss)  # 物理約束
+            )
 
             # 輔助損失：原始空間的Huber損失，專注於較大誤差
             huber_loss = F.smooth_l1_loss(delta_w_pred, targets, beta=0.01)  # 降低beta值

@@ -143,7 +143,10 @@ def train_fold(fold_idx, fold_data, device, epochs=100):
     model = HybridPINNLSTM(config)
     
     # 創建訓練器，使用更強的學習策略
-    trainer = SimpleTrainer(model, config, device, lr=0.0005, weight_decay=0.0005)
+    # 使用更適合的優化設置
+    trainer = SimpleTrainer(model, config, device, 
+                        lr=0.001,  # 提高初始學習率
+                        weight_decay=0.0001)  # 降低權重衰減
     
     # 訓練模型
     history = trainer.train(train_loader, val_loader, epochs=epochs, patience=20)
